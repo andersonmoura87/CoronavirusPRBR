@@ -1,0 +1,32 @@
+# pandemic-data-platform — ETL dependencies
+# Python 3.11+
+#
+# Pin strategy: minor version pinned for reproducibility, patch left open
+# so security fixes are picked up automatically (managed via Dependabot).
+
+# ── Async HTTP ──────────────────────────────────────────────────────────────
+httpx[http2]==0.27.*          # async HTTP client with HTTP/2 support
+tenacity==8.3.*               # retry logic with exponential back-off
+
+# ── Database ─────────────────────────────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.*    # ORM + Core; async engine
+asyncpg==0.29.*               # async PostgreSQL driver (used by SQLAlchemy)
+psycopg2-binary==2.9.*        # sync driver for Alembic migrations
+
+# ── Migrations ───────────────────────────────────────────────────────────────
+alembic==1.13.*               # schema migrations (run separately from ETL)
+
+# ── Data processing ──────────────────────────────────────────────────────────
+pandas==2.2.*                 # DataFrame helpers for rolling averages / diffs
+numpy==1.26.*                 # required by pandas; pinned for ABI stability
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+structlog==24.1.*             # structured JSON logging
+
+# ── Validation / settings ────────────────────────────────────────────────────
+pydantic==2.7.*               # data validation (used in API models too)
+pydantic-settings==2.2.*      # settings management via env vars
+python-dotenv==1.0.*          # load .env in local development
+
+# ── Scheduling (for standalone ETL cron container) ───────────────────────────
+apscheduler==3.10.*           # APScheduler for cron-style scheduling

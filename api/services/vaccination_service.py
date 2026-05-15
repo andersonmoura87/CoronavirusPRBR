@@ -39,7 +39,7 @@ async def get_vaccination_summary(
     if end_date:
         filters.append(VaccinationRecord.date <= end_date)
 
-    where_clause = and_(*filters) if filters else True
+    where_clause = and_(*filters) if filters else and_()
 
     # Pivot: one row per (date, state) with aggregated dose counts
     pivot_stmt = (

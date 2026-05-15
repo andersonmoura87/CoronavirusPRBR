@@ -74,7 +74,7 @@ async def get_cases(
     if end_date:
         filters.append(CovidCase.date <= end_date)
 
-    where_clause = and_(*filters) if filters else True
+    where_clause = and_(*filters) if filters else and_()
 
     # Total count (for pagination metadata)
     count_stmt = select(func.count()).select_from(CovidCase).where(where_clause)

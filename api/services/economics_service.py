@@ -36,7 +36,7 @@ async def get_economics_with_correlation(
         filters.append(EconomicIndicator.reference_date <= end_date)
 
     from sqlalchemy import and_
-    where_clause = and_(*filters) if filters else True
+    where_clause = and_(*filters) if filters else and_()
 
     eco_stmt = (
         select(EconomicIndicator)

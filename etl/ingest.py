@@ -29,7 +29,12 @@ from typing import AsyncIterator
 
 import httpx
 import structlog
-from sqlalchemy import insert
+# postgresql.insert gives on_conflict_do_update / .excluded; falls back to
+# standard Insert at runtime when using SQLite (tests).
+try:
+    from sqlalchemy.dialects.postgresql import insert
+except ImportError:  # pragma: no cover
+    from sqlalchemy import insert  # type: ignore[assignment]
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from tenacity import (
     retry,
@@ -116,7 +121,7 @@ def build_http_client() -> httpx.AsyncClient:
     wait=wait_exponential(multiplier=1, min=2, max=60),
     stop=stop_after_attempt(MAX_RETRIES),
 )
-async def _get_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+async def _get_with_retry(client: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
     response = await client.get(url, **kwargs)
     response.raise_for_status()
     return response

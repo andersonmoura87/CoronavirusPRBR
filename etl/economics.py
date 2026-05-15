@@ -438,7 +438,7 @@ async def fetch_economics_summary(session: AsyncSession) -> list[dict]:
     This is used by the FastAPI /economics endpoint to avoid complex joins
     at query time — the ETL pre-joins and the API just reads.
     """
-    from sqlalchemy import select, func as sql_func
+    from sqlalchemy import select
     from etl.models import EconomicIndicator
 
     result = await session.execute(

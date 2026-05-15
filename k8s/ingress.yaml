@@ -1,0 +1,90 @@
+# =============================================================================
+# k8s/ingress.yaml — Ingress for local k3d + future cloud deployment
+#
+# k3d bundles Traefik as its default ingress controller.
+# This manifest works out-of-the-box with a local k3d cluster:
+#
+#   k3d cluster create pandemic-cluster --agents 2 -p "80:80@loadbalancer"
+#   echo "127.0.0.1 pandemic.local" >> /etc/hosts
+#
+# Then access:
+#   http://pandemic.local/docs        → FastAPI Swagger UI
+#   http://pandemic.local/dashboard/  → Streamlit
+#   http://pandemic.local/grafana/    → Grafana
+#
+# For production (cloud cluster + real domain), add a cert-manager annotation
+# and replace `pandemic.local` with your domain. The rules stay identical.
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pandemic-ingress
+  namespace: pandemic
+  labels:
+    app.kubernetes.io/part-of: pandemic-data-platform
+    app.kubernetes.io/component: ingress
+  annotations:
+    # ── Traefik (k3d default) ─────────────────────────────────────────────
+    kubernetes.io/ingress.class: traefik
+
+    # Strip the /api prefix before forwarding to FastAPI
+    # (so /api/cases/brasil → /cases/brasil at the container)
+    traefik.ingress.kubernetes.io/router.middlewares: pandemic-strip-api-prefix@kubernetescrd
+
+    # ── Rate limiting (surge protection at the edge) ──────────────────────
+    # Uncomment when Traefik RateLimitMiddleware is configured:
+    # traefik.ingress.kubernetes.io/router.middlewares: pandemic-rate-limit@kubernetescrd
+
+    # ── cert-manager (production TLS) ────────────────────────────────────
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+
+spec:
+  # tls:
+  #   - hosts: [pandemic.yourdomain.com]
+  #     secretName: pandemic-tls-secret
+  rules:
+    - host: pandemic.local   # add to /etc/hosts for local development
+      http:
+        paths:
+          # FastAPI — all API paths
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pandemic-api
+                port:
+                  name: http
+
+          # Streamlit dashboard
+          - path: /dashboard
+            pathType: Prefix
+            backend:
+              service:
+                name: pandemic-dashboard
+                port:
+                  name: http
+
+          # Grafana
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: pandemic-grafana
+                port:
+                  name: http
+
+---
+# ---------------------------------------------------------------------------
+# Traefik Middleware — strip /api prefix
+# Allows routing /api/cases/brasil to the FastAPI service as /cases/brasil.
+# ---------------------------------------------------------------------------
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: pandemic-strip-api-prefix
+  namespace: pandemic
+spec:
+  stripPrefix:
+    prefixes:
+      - /api

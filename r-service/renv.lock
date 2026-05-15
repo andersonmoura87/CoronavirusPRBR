@@ -1,0 +1,27 @@
+{
+  "__PLACEHOLDER__": true,
+  "__instructions__": [
+    "Este arquivo é um placeholder. Para gerar o renv.lock real com todas as",
+    "versões exatas (incluindo dependências transitivas do Prophet/Stan), execute:",
+    "",
+    "  docker build --target builder \\",
+    "    --output type=local,dest=./r-service/renv-out \\",
+    "    -f r-service/Dockerfile r-service/",
+    "",
+    "  cp r-service/renv-out/install/renv.lock r-service/renv.lock",
+    "  git add r-service/renv.lock && git commit -m 'chore: update renv.lock'",
+    "",
+    "O lockfile gerado conterá centenas de pacotes com versões exatas,",
+    "garantindo que duas builds distintas instalem exactamente o mesmo Prophet."
+  ],
+  "R": {
+    "Version": "4.3.3",
+    "Repositories": [
+      {
+        "Name": "CRAN",
+        "URL": "https://packagemanager.posit.co/cran/2024-06-01"
+      }
+    ]
+  },
+  "Packages": {}
+}

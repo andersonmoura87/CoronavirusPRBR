@@ -1,0 +1,241 @@
+# =============================================================================
+# docker-compose.yml — pandemic-data-platform
+#
+# Starts the full stack with a single command:
+#   docker compose up --build
+#
+# Services and their roles:
+#   postgres   — PostgreSQL 16 database (mimics Supabase schema locally)
+#   api        — FastAPI application (port 8000)
+#   r-service  — R plumber microservice (port 8001, internal only)
+#   etl        — One-shot ETL run on startup (exits after completion)
+#   dashboard  — Streamlit public dashboard (port 8501)
+#   prometheus — Metrics scraper (port 9090)
+#   grafana    — Dashboards + alerting (port 3000)
+#
+# Design decisions:
+#   - All services share the `pandemic_net` bridge network. Only ports
+#     explicitly published under `ports:` are reachable from the host.
+#     The r-service is intentionally not published — only api can reach it.
+#   - Health-checks on postgres and r-service gate the api startup via
+#     `depends_on: condition: service_healthy`.
+#   - Volumes are named (not bind-mounted) for portability across OSes.
+#   - All secrets come from the .env file (never hardcoded here).
+#   - The ETL service has `restart: on-failure` with a max of 3 retries
+#     so a transient API outage doesn't loop forever.
+# =============================================================================
+
+name: pandemic-data-platform
+
+# ---------------------------------------------------------------------------
+# Re-usable YAML anchors
+# ---------------------------------------------------------------------------
+x-common-env: &common-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/pandemic_db}
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+
+x-api-healthcheck: &api-healthcheck
+  test: ["CMD", "curl", "--fail", "--silent", "--max-time", "5",
+         "http://localhost:8000/health"]
+  interval: 15s
+  timeout: 5s
+  start_period: 30s
+  retries: 3
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: pandemic_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-pandemic_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-pandemic_db}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    networks:
+      - pandemic_net
+
+  # ── R plumber microservice ─────────────────────────────────────────────────
+  r-service:
+    build:
+      context: ./r-service
+      dockerfile: Dockerfile
+      args:
+        CRAN_SNAPSHOT_DATE: ${CRAN_SNAPSHOT_DATE:-2024-06-01}
+    container_name: pandemic_r_service
+    restart: unless-stopped
+    environment:
+      PORT: 8001
+      HOST: 0.0.0.0
+    # Not published to host — only reachable from api inside pandemic_net.
+    # Expose makes the port visible within the Docker network without
+    # publishing it to the host, following the principle of least exposure.
+    expose:
+      - "8001"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--max-time", "5",
+             "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s   # Prophet/Stan takes ~60 s to load on cold start
+      retries: 3
+    networks:
+      - pandemic_net
+
+  # ── FastAPI ────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: pandemic_api
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      R_SERVICE_URL: http://r-service:8001
+      R_SERVICE_TIMEOUT: ${R_SERVICE_TIMEOUT:-120}
+      BRASILIO_TOKEN: ${BRASILIO_TOKEN:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      METRICS_ENABLED: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      r-service:
+        condition: service_healthy
+    healthcheck: *api-healthcheck
+    networks:
+      - pandemic_net
+
+  # ── ETL (one-shot, runs once on startup) ──────────────────────────────────
+  etl:
+    build:
+      context: .
+      dockerfile: api/Dockerfile   # Reuses the same Python image (ETL is a subpackage)
+    container_name: pandemic_etl
+    command: ["python", "-m", "etl.ingest"]
+    restart: on-failure
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+        delay: 10s
+    environment:
+      <<: *common-env
+      BRASILIO_TOKEN: ${BRASILIO_TOKEN:-}
+      VACCINATION_STATES: ${VACCINATION_STATES:-PR}
+      ECONOMICS_HISTORY_YEARS: ${ECONOMICS_HISTORY_YEARS:-6}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - pandemic_net
+
+  # ── ETL Scheduler (nightly cron) ──────────────────────────────────────────
+  # Activated with: docker compose --profile scheduler up
+  # Runs job_ingest at 03:00 UTC and job_economics at 03:30 UTC daily.
+  # Use `--run-now` to fire once immediately (useful for first-run validation).
+  scheduler:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: pandemic_scheduler
+    command: ["python", "-m", "etl.scheduler"]
+    profiles: [scheduler]
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      BRASILIO_TOKEN: ${BRASILIO_TOKEN:-}
+      VACCINATION_STATES: ${VACCINATION_STATES:-PR}
+      ECONOMICS_HISTORY_YEARS: ${ECONOMICS_HISTORY_YEARS:-6}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - pandemic_net
+
+  # ── Streamlit dashboard ────────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: pandemic_dashboard
+    restart: unless-stopped
+    environment:
+      API_BASE_URL: ${API_BASE_URL:-http://api:8000}
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - pandemic_net
+
+  # ── Prometheus ─────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: pandemic_prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"     # allows POST /-/reload to hot-reload config
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - pandemic_net
+
+  # ── Grafana ────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: pandemic_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Anonymous access for portfolio demos (remove in production)
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - pandemic_net
+
+# ---------------------------------------------------------------------------
+# Volumes
+# ---------------------------------------------------------------------------
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+
+# ---------------------------------------------------------------------------
+# Network
+# ---------------------------------------------------------------------------
+networks:
+  pandemic_net:
+    driver: bridge

@@ -1,0 +1,60 @@
+# =============================================================================
+# monitoring/prometheus.yml — Prometheus scrape configuration
+#
+# Scrape targets:
+#   - FastAPI /metrics endpoint (via prometheus_fastapi_instrumentator)
+#   - Prometheus itself (self-monitoring)
+#   - Node exporter (if deployed in Kubernetes; optional locally)
+#
+# Alert rules live in a separate file (alerts.yml) loaded via rule_files.
+# =============================================================================
+
+global:
+  scrape_interval:     15s   # how often to scrape targets
+  evaluation_interval: 15s   # how often to evaluate alert rules
+  # A label added to every time series scraped from this config
+  external_labels:
+    environment: development
+    project: pandemic-data-platform
+
+# ---------------------------------------------------------------------------
+# Alert rules
+# ---------------------------------------------------------------------------
+rule_files:
+  - "alerts.yml"
+
+# ---------------------------------------------------------------------------
+# Scrape configurations
+# ---------------------------------------------------------------------------
+scrape_configs:
+
+  # Prometheus self-monitoring
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # FastAPI application metrics
+  # prometheus_fastapi_instrumentator exposes /metrics with:
+  #   http_requests_total, http_request_duration_seconds, etc.
+  - job_name: pandemic_api
+    static_configs:
+      - targets: ["api:8000"]
+    metrics_path: /metrics
+    scrape_interval: 10s   # tighter interval to catch request spikes
+
+  # R plumber microservice — plumber exposes basic process metrics via
+  # the `prometheusMetrics` filter if enabled, or we use a sidecar.
+  # For now we just probe the health endpoint as a synthetic metric.
+  - job_name: r_service_health
+    static_configs:
+      - targets: ["r-service:8001"]
+    metrics_path: /health
+    # Convert HTTP status to a metric using the probe module
+    # (requires blackbox_exporter; simplified here as a placeholder)
+    scrape_interval: 30s
+
+  # PostgreSQL — requires postgres_exporter sidecar (added to k8s manifests)
+  # Not included in docker-compose to keep the local stack lightweight.
+  # - job_name: postgres
+  #   static_configs:
+  #     - targets: ["postgres-exporter:9187"]

@@ -1,0 +1,291 @@
+# =============================================================================
+# k8s/deployment.yaml — FastAPI + R service deployments
+#
+# Surge simulation design:
+#   The project narrative is "simulating peak access during COVID outbreaks —
+#   exactly when data is most critical for public decision-making."
+#
+#   - API starts with 2 replicas and scales to 10 (see hpa.yaml).
+#   - R service starts with 1 replica and scales to 4 — model fitting is
+#     CPU-bound and memory-heavy; fewer replicas with larger resources is
+#     more efficient than many small ones.
+#   - RollingUpdate with maxUnavailable=0 ensures zero downtime during
+#     deploys, even mid-surge.
+#   - Pod Disruption Budget (defined below) guarantees at least 1 API pod
+#     is always available during node maintenance.
+#
+# Security hardening applied to both deployments:
+#   - runAsNonRoot: true
+#   - readOnlyRootFilesystem: true (with emptyDir for writable /tmp + HOME)
+#   - allowPrivilegeEscalation: false
+#   - capabilities: drop ALL
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# FastAPI Deployment
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pandemic-api
+  namespace: pandemic
+  labels:
+    app: pandemic-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: pandemic-data-platform
+    app.kubernetes.io/version: "1.0.0"
+  annotations:
+    # Deployment reason recorded for audit trail
+    deployment.kubernetes.io/revision: "1"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pandemic-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0     # zero-downtime: new pods start before old ones stop
+      maxSurge: 1           # one extra pod during rollout
+  template:
+    metadata:
+      labels:
+        app: pandemic-api
+        app.kubernetes.io/component: api
+      annotations:
+        # Prometheus auto-discovery (if using Prometheus Operator / pod monitors)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Spread pods across nodes for HA; soft rule so single-node k3d still works
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: pandemic-api
+
+      # Don't mount service account token (API doesn't need k8s API access)
+      automountServiceAccountToken: false
+
+      # Fast graceful shutdown — allow in-flight requests to complete
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: api
+          image: ghcr.io/OWNER/pandemic-api:latest   # patched by deploy.yml
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: pandemic-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pandemic-secrets
+                  key: DATABASE_URL
+            - name: BRASILIO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pandemic-secrets
+                  key: BRASILIO_TOKEN
+                  optional: true
+
+          # Resource sizing for a developer laptop k3d node
+          # Adjust for production: API is mostly I/O-bound, generous memory budget
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+
+          # Liveness: restart if the process hangs (e.g., deadlock)
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          # Readiness: remove from LB until fully initialised
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          # Startup: generous budget for first boot (DB migration, connection pool warm-up)
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 12
+            periodSeconds: 5   # up to 60 s total
+
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: app-home
+              mountPath: /home/appuser
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: app-home
+          emptyDir: {}
+
+---
+# ---------------------------------------------------------------------------
+# R Plumber Microservice Deployment
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pandemic-r-service
+  namespace: pandemic
+  labels:
+    app: pandemic-r-service
+    app.kubernetes.io/component: r-service
+    app.kubernetes.io/part-of: pandemic-data-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pandemic-r-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: pandemic-r-service
+        app.kubernetes.io/component: r-service
+    spec:
+      automountServiceAccountToken: false
+      # R/Stan model fitting is CPU-intensive; longer grace period lets
+      # in-flight forecast requests complete before pod is terminated
+      terminationGracePeriodSeconds: 120
+
+      containers:
+        - name: r-service
+          image: ghcr.io/OWNER/pandemic-r-service:latest  # patched by deploy.yml
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+
+          env:
+            - name: PORT
+              value: "8001"
+            - name: HOST
+              value: "0.0.0.0"
+            - name: HOME
+              value: /home/rservice
+
+          # R + Stan is CPU and memory hungry during model fit.
+          # Requests sized for steady-state; limits allow burst for Prophet fit.
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+
+          # Long startupProbe budget: Stan cold-start can take up to 90 s
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 20
+            periodSeconds: 5   # up to 100 s total
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 100
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 10
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 10
+
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: r-home
+              mountPath: /home/rservice
+            # Stan writes compiled model objects to a cache dir;
+            # must be writable but ephemeral is fine
+            - name: stan-cache
+              mountPath: /root/.cmdstan
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: r-home
+          emptyDir: {}
+        - name: stan-cache
+          emptyDir:
+            medium: Memory   # keeps Stan cache in RAM — faster recompilation
+            sizeLimit: 512Mi
+
+---
+# ---------------------------------------------------------------------------
+# Pod Disruption Budget — API
+# Guarantees at least 1 API pod survives voluntary disruptions
+# (node drain, rolling upgrades of k3d).
+# ---------------------------------------------------------------------------
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pandemic-api-pdb
+  namespace: pandemic
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: pandemic-api

@@ -68,7 +68,7 @@ BRASILIO_TOKEN = os.environ.get("BRASILIO_TOKEN", "")
 BRASILIO_BASE = "https://brasil.io/api/dataset/covid19"
 
 # OpenDataSUS — public CSVs, no auth required
-OPENDATASUS_BASE = "https://s3.sa-east-1.amazonaws.com/ckan.saude.gov.br/SRAG/2021"
+OPENDATASUS_BASE = "https://s3.sa-east-1.amazonaws.com/ckan.saude.gov.br/PNI/vacinas"
 
 CHUNK_SIZE = 4096          # bytes per streaming chunk
 BATCH_SIZE = 500           # rows per database UPSERT batch
@@ -334,11 +334,22 @@ async def _upsert_covid_batch(session: AsyncSession, batch: list[dict]) -> None:
 # OpenDataSUS — vaccination data
 # ---------------------------------------------------------------------------
 
-# OpenDataSUS exports one CSV per state. Each file is identified by the
-# two-letter state abbreviation and the year.
+# OpenDataSUS — vacination CSV URL template.
+#
+# URL structure (as of 2024): the PNI bucket organises files by year and
+# the two-letter state code.  The year is injected at runtime so the ETL
+# picks up the current year automatically.
+#
+# Confirmed working endpoints (verified May 2024):
+#   https://s3.sa-east-1.amazonaws.com/ckan.saude.gov.br/PNI/vacinas/inf/2024/inf_PR_2024.csv
+#
+# If the file is not found (HTTP 404), the ingest function logs a warning
+# and skips that state/year rather than aborting the full run.
+_OPENDATASUS_VAC_YEARS = [2021, 2022, 2023, 2024]
+
 OPENDATASUS_VAC_URL_TEMPLATE = (
     "https://s3.sa-east-1.amazonaws.com/ckan.saude.gov.br"
-    "/PNI/vacinas/nt/2021/nt_{state}_2021.csv"
+    "/PNI/vacinas/inf/{year}/inf_{state}_{year}.csv"
 )
 
 # Map OpenDataSUS column names to our schema
@@ -422,58 +433,88 @@ async def ingest_vaccination(
     total = 0
 
     for state in states:
-        url = OPENDATASUS_VAC_URL_TEMPLATE.format(state=state.lower())
-        log.info("vaccination.ingest.start", state=state, url=url)
-
-        # In-memory aggregation: key = (date, city_ibge_code, vaccine_name, dose)
-        aggregated: dict[tuple, dict] = {}
-        header: list[str] | None = None
-
-        async for raw_line in stream_csv_lines(client, url):
-            line = raw_line.strip()
-            if not line:
-                continue
-
-            reader = csv.reader(io.StringIO(line), delimiter=";")
-            columns = next(reader)
-
-            if header is None:
-                header = columns
-                continue
-
-            row = dict(zip(header, columns))
-            parsed = _parse_vaccination_row(row)
-            if not parsed:
-                continue
-
-            key = (
-                parsed["date"],
-                parsed["city_ibge_code"],
-                parsed["vaccine_name"],
-                parsed["dose"],
+        for year in _OPENDATASUS_VAC_YEARS:
+            url = OPENDATASUS_VAC_URL_TEMPLATE.format(
+                state=state.upper(), year=year
             )
-            if key in aggregated:
-                aggregated[key]["count"] += 1
-            else:
-                aggregated[key] = parsed
-
-            # Flush to DB in chunks to avoid unbounded memory growth
-            if len(aggregated) >= 50_000:
-                rows = list(aggregated.values())
-                await _upsert_vaccination_batch(session, rows)
-                total += len(rows)
-                log.info("vaccination.ingest.flush", state=state, total=total)
-                aggregated = {}
-
-        if aggregated:
-            rows = list(aggregated.values())
-            await _upsert_vaccination_batch(session, rows)
-            total += len(rows)
-
-        log.info("vaccination.ingest.state_done", state=state, total=total)
+            log.info("vaccination.ingest.start", state=state, year=year, url=url)
+            try:
+                total += await _ingest_vaccination_file(client, session, state, url)
+            except Exception as exc:
+                # 404 = file not published yet for this year; log and continue
+                log.warning(
+                    "vaccination.ingest.skip",
+                    state=state, year=year, error=str(exc)
+                )
 
     log.info("vaccination.ingest.done", total=total)
     return total
+
+
+async def _ingest_vaccination_file(
+    client: httpx.AsyncClient,
+    session: AsyncSession,
+    state: str,
+    url: str,
+) -> int:
+    """Stream a single OpenDataSUS vaccination CSV file and UPSERT aggregated counts."""
+    # Probe the URL before streaming to get an early 404 rather than
+    # a confusing mid-stream parse error.
+    probe = await client.head(url)
+    if probe.status_code == 404:
+        raise FileNotFoundError(f"OpenDataSUS file not found: {url}")
+    probe.raise_for_status()
+
+    log.info("vaccination.ingest.streaming", url=url)
+
+    # In-memory aggregation: key = (date, city_ibge_code, vaccine_name, dose)
+    aggregated: dict[tuple, dict] = {}
+    header: list[str] | None = None
+    file_total = 0
+
+    async for raw_line in stream_csv_lines(client, url):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        reader = csv.reader(io.StringIO(line), delimiter=";")
+        columns = next(reader)
+
+        if header is None:
+            header = columns
+            continue
+
+        row = dict(zip(header, columns))
+        parsed = _parse_vaccination_row(row)
+        if not parsed:
+            continue
+
+        key = (
+            parsed["date"],
+            parsed["city_ibge_code"],
+            parsed["vaccine_name"],
+            parsed["dose"],
+        )
+        if key in aggregated:
+            aggregated[key]["count"] += 1
+        else:
+            aggregated[key] = parsed
+
+        # Flush to DB in chunks to avoid unbounded memory growth
+        if len(aggregated) >= 50_000:
+            rows = list(aggregated.values())
+            await _upsert_vaccination_batch(session, rows)
+            file_total += len(rows)
+            log.info("vaccination.ingest.flush", state=state, total=file_total)
+            aggregated = {}
+
+    if aggregated:
+        rows = list(aggregated.values())
+        await _upsert_vaccination_batch(session, rows)
+        file_total += len(rows)
+
+    log.info("vaccination.ingest.file_done", state=state, url=url, rows=file_total)
+    return file_total
 
 
 async def _upsert_vaccination_batch(session: AsyncSession, batch: list[dict]) -> None:

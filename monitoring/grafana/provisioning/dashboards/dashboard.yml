@@ -1,0 +1,17 @@
+# Grafana dashboard provisioning config
+# Points Grafana at the /etc/grafana/provisioning/dashboards folder
+# where the JSON dashboard definitions live.
+
+apiVersion: 1
+
+providers:
+  - name: pandemic-platform
+    orgId: 1
+    folder: "Pandemic Data Platform"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

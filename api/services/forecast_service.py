@@ -11,7 +11,6 @@ This is the only module where the Python and R worlds meet:
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Optional
 
 from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncSession

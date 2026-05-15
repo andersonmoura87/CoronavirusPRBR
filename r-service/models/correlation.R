@@ -1,3 +1,8 @@
+# Suppress R CMD CHECK / lintr false positives for dplyr NSE column references.
+# These variables (cases, value, indicator, ds, y) are used inside dplyr verbs
+# such as filter(), mutate(), and summarise() via non-standard evaluation (NSE).
+utils::globalVariables(c("cases", "value", "indicator", "month"))
+
 # =============================================================================
 # correlation.R — COVID-19 × macroeconomic indicator correlation analysis
 #
@@ -328,10 +333,12 @@ run_full_correlation <- function(covid_df, economic_df) {
     ols_regression       = run_ols_regression(df),
     lagged_correlation   = lapply(
       indicators,
-      function(ind) list(
-        indicator = ind,
-        lags      = run_lagged_correlation(df, ind, max_lag = 6L)
-      )
+      function(ind) {
+        list(
+          indicator = ind,
+          lags      = run_lagged_correlation(df, ind, max_lag = 6L)
+        )
+      }
     ),
     granger_causality  = tryCatch(
       run_granger_test(df, order = 3L),

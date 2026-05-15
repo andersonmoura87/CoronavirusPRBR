@@ -25,11 +25,11 @@ import io
 import logging
 import os
 from datetime import date, datetime
-from typing import AsyncIterator, Iterator
+from typing import AsyncIterator
 
 import httpx
 import structlog
-from sqlalchemy import insert, text
+from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from tenacity import (
     retry,

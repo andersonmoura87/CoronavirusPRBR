@@ -1,3 +1,6 @@
+# Suppress lintr / R CMD CHECK false positives for dplyr/tidyr NSE references.
+utils::globalVariables(c("ds", "y", "yhat", "yhat_lower", "yhat_upper"))
+
 # =============================================================================
 # forecast.R — Time-series forecasting models
 #

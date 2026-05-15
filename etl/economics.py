@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any
 
 import httpx
@@ -36,7 +36,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from etl.models import Base, EconomicIndicator
+from etl.models import EconomicIndicator
 
 # ---------------------------------------------------------------------------
 # Logging

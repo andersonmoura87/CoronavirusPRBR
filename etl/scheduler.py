@@ -26,7 +26,6 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import datetime
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler

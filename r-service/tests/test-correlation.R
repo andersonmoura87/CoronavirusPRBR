@@ -100,8 +100,8 @@ test_that("compute_pairwise_correlation returns one row per indicator", {
   result <- compute_pairwise_correlation(df)
   expect_equal(nrow(result), 3L)   # SELIC, IPCA, DESEMPREGO
   expect_named(result, c("indicator", "pearson_r", "pearson_p",
-                          "pearson_ci_lower", "pearson_ci_upper",
-                          "spearman_rho", "spearman_p", "n_obs"),
+                         "pearson_ci_lower", "pearson_ci_upper",
+                         "spearman_rho", "spearman_p", "n_obs"),
                ignore.order = TRUE)
 })
 

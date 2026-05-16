@@ -28,7 +28,11 @@ router = APIRouter(tags=["Vaccination"])
 async def vaccination(
     state: Annotated[
         Optional[str],
-        Query(min_length=2, max_length=2, description="Two-letter state code (e.g. PR, SP)"),
+        Query(
+            min_length=2,
+            max_length=2,
+            description="Two-letter state code (e.g. PR, SP)",
+        ),
     ] = None,
     start_date: Annotated[
         Optional[date],

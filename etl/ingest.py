@@ -25,10 +25,11 @@ import io
 import logging
 import os
 from datetime import date, datetime
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 import structlog
+
 # postgresql.insert gives on_conflict_do_update / .excluded; falls back to
 # standard Insert at runtime when using SQLite (tests).
 try:
@@ -75,9 +76,9 @@ BRASILIO_BASE = "https://brasil.io/api/dataset/covid19"
 # OpenDataSUS — public CSVs, no auth required
 OPENDATASUS_BASE = "https://s3.sa-east-1.amazonaws.com/ckan.saude.gov.br/PNI/vacinas"
 
-CHUNK_SIZE = 4096          # bytes per streaming chunk
-BATCH_SIZE = 500           # rows per database UPSERT batch
-HTTP_TIMEOUT = 60.0        # seconds
+CHUNK_SIZE = 4096  # bytes per streaming chunk
+BATCH_SIZE = 500  # rows per database UPSERT batch
+HTTP_TIMEOUT = 60.0  # seconds
 MAX_RETRIES = 5
 
 # ---------------------------------------------------------------------------
@@ -105,6 +106,7 @@ async def init_db() -> None:
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
+
 def build_http_client() -> httpx.AsyncClient:
     headers = {"User-Agent": "pandemic-data-platform/1.0 (portfolio)"}
     if BRASILIO_TOKEN:
@@ -121,8 +123,10 @@ def build_http_client() -> httpx.AsyncClient:
     wait=wait_exponential(multiplier=1, min=2, max=60),
     stop=stop_after_attempt(MAX_RETRIES),
 )
-async def _get_with_retry(client: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
-    response = await client.get(url, **kwargs)
+async def _get_with_retry(
+    client: httpx.AsyncClient, url: str, **kwargs: Any
+) -> httpx.Response:
+    response = await client.get(url, **kwargs)  # type: ignore[arg-type]
     response.raise_for_status()
     return response
 
@@ -147,6 +151,7 @@ async def stream_csv_lines(client: httpx.AsyncClient, url: str) -> AsyncIterator
 # ---------------------------------------------------------------------------
 # brasil.io — COVID-19 cases
 # ---------------------------------------------------------------------------
+
 
 def _parse_covid_row(row: dict) -> dict | None:
     """
@@ -261,6 +266,7 @@ async def ingest_covid_cases(
 # ---------------------------------------------------------------------------
 # brasil.io — bulk CSV download (faster, needs token)
 # ---------------------------------------------------------------------------
+
 
 async def ingest_covid_cases_bulk_csv(
     client: httpx.AsyncClient,
@@ -392,7 +398,10 @@ def _parse_vaccination_row(row: dict) -> dict | None:
         return {
             "state": state,
             "city": (row.get("estabelecimento_municipio_nome") or "").strip() or None,
-            "city_ibge_code": (row.get("estabelecimento_municipio_codigo") or "").strip() or None,
+            "city_ibge_code": (
+                row.get("estabelecimento_municipio_codigo") or ""
+            ).strip()
+            or None,
             "date": record_date,
             "vaccine_name": (row.get("vacina_nome") or "").strip()[:100] or None,
             "dose": dose,
@@ -439,17 +448,14 @@ async def ingest_vaccination(
 
     for state in states:
         for year in _OPENDATASUS_VAC_YEARS:
-            url = OPENDATASUS_VAC_URL_TEMPLATE.format(
-                state=state.upper(), year=year
-            )
+            url = OPENDATASUS_VAC_URL_TEMPLATE.format(state=state.upper(), year=year)
             log.info("vaccination.ingest.start", state=state, year=year, url=url)
             try:
                 total += await _ingest_vaccination_file(client, session, state, url)
             except Exception as exc:
                 # 404 = file not published yet for this year; log and continue
                 log.warning(
-                    "vaccination.ingest.skip",
-                    state=state, year=year, error=str(exc)
+                    "vaccination.ingest.skip", state=state, year=year, error=str(exc)
                 )
 
     log.info("vaccination.ingest.done", total=total)
@@ -551,14 +557,15 @@ async def _upsert_vaccination_batch(session: AsyncSession, batch: list[dict]) ->
 # Utility helpers
 # ---------------------------------------------------------------------------
 
-def _safe_int(value) -> int | None:
+
+def _safe_int(value: object) -> int | None:
     try:
         return int(value) if value not in (None, "", "None") else None
     except (ValueError, TypeError):
         return None
 
 
-def _safe_float(value) -> float | None:
+def _safe_float(value: object) -> float | None:
     try:
         return float(value) if value not in (None, "", "None") else None
     except (ValueError, TypeError):
@@ -568,6 +575,7 @@ def _safe_float(value) -> float | None:
 # ---------------------------------------------------------------------------
 # Entry point — run all ingestion tasks
 # ---------------------------------------------------------------------------
+
 
 async def run_all(state_filter: str | None = None) -> None:
     """
@@ -584,9 +592,7 @@ async def run_all(state_filter: str | None = None) -> None:
             await ingest_covid_cases(client, session, state=state_filter)
 
             # Vaccination — streaming CSV (Paraná by default)
-            vac_states = (
-                [state_filter] if state_filter else ["PR"]
-            )
+            vac_states = [state_filter] if state_filter else ["PR"]
             await ingest_vaccination(client, session, states=vac_states)
 
 

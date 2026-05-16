@@ -48,4 +48,4 @@ class Settings(BaseSettings):
     max_page_size: int = 5000
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]

@@ -35,8 +35,9 @@ async def get_economics_with_correlation(
     if end_date:
         filters.append(EconomicIndicator.reference_date <= end_date)
 
-    from sqlalchemy import and_
-    where_clause = and_(*filters) if filters else and_()
+    from sqlalchemy import and_, true
+
+    where_clause = and_(*filters) if filters else true()
 
     eco_stmt = (
         select(EconomicIndicator)
@@ -88,7 +89,9 @@ async def get_economics_with_correlation(
 
     return {
         "series": series_output,
-        "correlation": _parse_correlation(correlation_result.get("pairwise_correlation", [])),
+        "correlation": _parse_correlation(
+            correlation_result.get("pairwise_correlation", [])
+        ),
         "ols": correlation_result.get("ols_regression", {}),
         "granger": _parse_granger(correlation_result.get("granger_causality", [])),
         "meta": correlation_result.get("meta", {}),
@@ -102,16 +105,15 @@ def _parse_correlation(raw: list | dict) -> list[dict]:
             return []
         keys = list(raw.keys())
         n = len(raw[keys[0]])
-        return [
-            {k: raw[k].get(str(i)) for k in keys}
-            for i in range(n)
-        ]
+        return [{k: raw[k].get(str(i)) for k in keys} for i in range(n)]
     return raw if isinstance(raw, list) else []
 
 
 def _parse_granger(raw: list | dict) -> list[dict]:
     if isinstance(raw, dict) and "error" in raw:
-        return [{"lag": 0, "f_statistic": None, "p_value": None, "conclusion": raw["error"]}]
+        return [
+            {"lag": 0, "f_statistic": None, "p_value": None, "conclusion": raw["error"]}
+        ]
     if isinstance(raw, dict):
         keys = list(raw.keys())
         if not keys:

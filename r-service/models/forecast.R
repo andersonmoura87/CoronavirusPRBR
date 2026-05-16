@@ -32,10 +32,11 @@ utils::globalVariables(c("ds", "y", "yhat", "yhat_lower", "yhat_upper"))
 
 suppressPackageStartupMessages({
   library(forecast)   # auto.arima, hw, Acf
-  library(prophet)    # prophet, make_future_dataframe, predict
   library(dplyr)
   library(lubridate)
   library(zoo)        # rollmean
+  # prophet is loaded lazily inside run_prophet() so that sourcing this file
+  # does not fail in CI environments where Prophet/Stan are not installed.
 })
 
 # ---------------------------------------------------------------------------
@@ -171,6 +172,13 @@ brazil_holidays <- function() {
 #' @param window     Trailing days used for fitting.
 #' @return data.frame [date, predicted, lower, upper, model, confidence_level]
 run_prophet <- function(df, horizon = 30L, conf_level = 0.95, window = 365L) {
+  # Lazy-load: keeps sourcing this file from failing when Prophet/Stan are
+  # not available (e.g. plain CI runner without the Docker R image).
+  if (!requireNamespace("prophet", quietly = TRUE)) {
+    stop("Package 'prophet' is required but not installed.")
+  }
+  suppressPackageStartupMessages(library(prophet))
+
   df <- prepare_series(df) |> trim_to_window(window)
 
   # Prophet requires columns named exactly `ds` and `y`

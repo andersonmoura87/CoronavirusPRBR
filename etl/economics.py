@@ -27,7 +27,11 @@ from typing import Any
 
 import httpx
 import structlog
-from sqlalchemy import insert
+
+try:
+    from sqlalchemy.dialects.postgresql import insert
+except ImportError:  # pragma: no cover
+    from sqlalchemy import insert  # type: ignore[assignment]
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from tenacity import (
     retry,
@@ -78,6 +82,7 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
+
 def build_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         headers={"User-Agent": "pandemic-data-platform/1.0 (portfolio)"},
@@ -91,7 +96,7 @@ def build_client() -> httpx.AsyncClient:
     wait=wait_exponential(multiplier=1, min=2, max=30),
     stop=stop_after_attempt(MAX_RETRIES),
 )
-async def _get_json(client: httpx.AsyncClient, url: str, **kwargs) -> Any:
+async def _get_json(client: httpx.AsyncClient, url: str, **kwargs: Any) -> Any:
     resp = await client.get(url, **kwargs)
     resp.raise_for_status()
     return resp.json()
@@ -225,16 +230,16 @@ SIDRA_BASE = "https://apisidra.ibge.gov.br/values"
 IBGE_SERIES = {
     "IPCA": {
         "table": 1737,
-        "variable": 2266,          # IPCA variação mensal
+        "variable": 2266,  # IPCA variação mensal
         "territorial_level": "1",  # Brasil
         "ibge_territorial_code": "all",
-        "period": "all",           # fetched with date filter via classification
+        "period": "all",  # fetched with date filter via classification
         "unit": "%",
         "name": "IPCA (variação mensal)",
     },
     "DESEMPREGO": {
         "table": 6381,
-        "variable": 4099,          # Taxa de desocupação
+        "variable": 4099,  # Taxa de desocupação
         "territorial_level": "1",
         "ibge_territorial_code": "all",
         "period": "all",
@@ -303,16 +308,14 @@ async def ingest_ibge_ipca(
     meta = IBGE_SERIES["IPCA"]
 
     # SIDRA period filter: "201901-202312" (month range)
-    period_filter = (
-        f"{start_date.strftime('%Y%m')}-{end_date.strftime('%Y%m')}"
-    )
+    period_filter = f"{start_date.strftime('%Y%m')}-{end_date.strftime('%Y%m')}"
 
     raw = await _fetch_sidra_table(
         client,
-        table_id=meta["table"],
-        variable=meta["variable"],
-        territorial_level=meta["territorial_level"],
-        ibge_territorial_code=meta["ibge_territorial_code"],
+        table_id=int(meta["table"]),  # type: ignore[arg-type]
+        variable=int(meta["variable"]),  # type: ignore[arg-type]
+        territorial_level=str(meta["territorial_level"]),
+        ibge_territorial_code=str(meta["ibge_territorial_code"]),
         periods=period_filter,
     )
 
@@ -327,15 +330,17 @@ async def ingest_ibge_ipca(
             continue
 
         try:
-            rows.append({
-                "indicator_code": "IPCA",
-                "indicator_name": meta["name"],
-                "source": "IBGE",
-                "reference_date": ref_date,
-                "value": float(value_str),
-                "unit": meta["unit"],
-                "notes": f"IBGE SIDRA tabela {meta['table']} variável {meta['variable']}",
-            })
+            rows.append(
+                {
+                    "indicator_code": "IPCA",
+                    "indicator_name": meta["name"],
+                    "source": "IBGE",
+                    "reference_date": ref_date,
+                    "value": float(value_str),
+                    "unit": meta["unit"],
+                    "notes": f"IBGE SIDRA tabela {meta['table']} variável {meta['variable']}",
+                }
+            )
         except ValueError as exc:
             log.warning("ibge.ipca.parse_error", item=item, error=str(exc))
 
@@ -379,10 +384,10 @@ async def ingest_ibge_unemployment(
 
     raw = await _fetch_sidra_table(
         client,
-        table_id=meta["table"],
-        variable=meta["variable"],
-        territorial_level=meta["territorial_level"],
-        ibge_territorial_code=meta["ibge_territorial_code"],
+        table_id=int(meta["table"]),  # type: ignore[arg-type]
+        variable=int(meta["variable"]),  # type: ignore[arg-type]
+        territorial_level=str(meta["territorial_level"]),
+        ibge_territorial_code=str(meta["ibge_territorial_code"]),
         periods=period_filter,
     )
 
@@ -396,15 +401,17 @@ async def ingest_ibge_unemployment(
             continue
 
         try:
-            rows.append({
-                "indicator_code": "DESEMPREGO",
-                "indicator_name": meta["name"],
-                "source": "IBGE",
-                "reference_date": ref_date,
-                "value": float(value_str),
-                "unit": meta["unit"],
-                "notes": f"IBGE SIDRA tabela {meta['table']} variável {meta['variable']}",
-            })
+            rows.append(
+                {
+                    "indicator_code": "DESEMPREGO",
+                    "indicator_name": meta["name"],
+                    "source": "IBGE",
+                    "reference_date": ref_date,
+                    "value": float(value_str),
+                    "unit": meta["unit"],
+                    "notes": f"IBGE SIDRA tabela {meta['table']} variável {meta['variable']}",
+                }
+            )
         except ValueError as exc:
             log.warning("ibge.unemployment.parse_error", item=item, error=str(exc))
 
@@ -430,6 +437,7 @@ async def ingest_ibge_unemployment(
 # ---------------------------------------------------------------------------
 # Helper: build combined economics summary for the API layer
 # ---------------------------------------------------------------------------
+
 
 async def fetch_economics_summary(session: AsyncSession) -> list[dict]:
     """
@@ -469,6 +477,7 @@ async def fetch_economics_summary(session: AsyncSession) -> list[dict]:
 # Utility helpers
 # ---------------------------------------------------------------------------
 
+
 def _date_to_quarter_str(d: date) -> str:
     """Convert a date to IBGE quarter string: 2021-05-01 → '2021T2'."""
     quarter = (d.month - 1) // 3 + 1
@@ -485,6 +494,7 @@ def _history_start() -> date:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 async def run_all() -> None:
     """Fetch all economic indicators and persist to database."""

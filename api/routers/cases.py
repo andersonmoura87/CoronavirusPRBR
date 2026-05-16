@@ -26,11 +26,15 @@ router = APIRouter(prefix="/cases", tags=["COVID-19 Cases"])
 # Shared query parameters — defined once, reused across the three routes
 _DateStart = Annotated[
     Optional[date],
-    Query(description="Filter from this date (ISO-8601, inclusive)", example="2021-01-01"),
+    Query(
+        description="Filter from this date (ISO-8601, inclusive)", example="2021-01-01"
+    ),
 ]
 _DateEnd = Annotated[
     Optional[date],
-    Query(description="Filter until this date (ISO-8601, inclusive)", example="2022-12-31"),
+    Query(
+        description="Filter until this date (ISO-8601, inclusive)", example="2022-12-31"
+    ),
 ]
 _PlaceType = Annotated[
     str,

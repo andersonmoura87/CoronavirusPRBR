@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 # Shared primitives
 # ---------------------------------------------------------------------------
 
+
 class HealthResponse(BaseModel):
     status: str = Field(examples=["ok"])
     version: str
@@ -34,6 +35,7 @@ class HealthResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # COVID cases
 # ---------------------------------------------------------------------------
+
 
 class CaseItem(BaseModel):
     date: date
@@ -66,6 +68,7 @@ class CasesResponse(BaseModel):
 # Vaccination
 # ---------------------------------------------------------------------------
 
+
 class VaccinationItem(BaseModel):
     date: date
     state: str
@@ -80,6 +83,7 @@ class VaccinationItem(BaseModel):
 
 class VaccinationSummaryItem(BaseModel):
     """Aggregated daily totals per state (used for the summary endpoint)."""
+
     date: date
     state: str
     dose_1: int = 0
@@ -98,6 +102,7 @@ class VaccinationResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Forecast (from R microservice)
 # ---------------------------------------------------------------------------
+
 
 class ForecastPoint(BaseModel):
     date: str = Field(description="ISO-8601 date string")
@@ -127,6 +132,7 @@ class ForecastResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Economics
 # ---------------------------------------------------------------------------
+
 
 class EconomicPoint(BaseModel):
     date: str = Field(description="First day of the reference month (ISO-8601)")

@@ -62,6 +62,7 @@ log = structlog.get_logger()
 # Lifespan — startup and shutdown hooks
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -123,7 +124,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["GET"],        # read-only API — no POST/PUT/DELETE from browser
+    allow_methods=["GET"],  # read-only API — no POST/PUT/DELETE from browser
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -165,6 +166,7 @@ if settings.metrics_enabled:
 # Exception handlers
 # ---------------------------------------------------------------------------
 
+
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
     log.warning("request.validation_error", detail=str(exc))
@@ -178,6 +180,7 @@ async def generic_error_handler(request: Request, exc: Exception) -> JSONRespons
         status_code=500,
         content={"detail": "Internal server error. Check logs for details."},
     )
+
 
 # ---------------------------------------------------------------------------
 # Routers
@@ -194,9 +197,11 @@ app.include_router(economics.router)
 # Root redirect → docs
 # ---------------------------------------------------------------------------
 
+
 @app.get("/", include_in_schema=False)
 async def root():
     from fastapi.responses import RedirectResponse
+
     return RedirectResponse(url="/docs")
 
 

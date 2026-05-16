@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etl.models import CovidCase
@@ -25,7 +25,7 @@ from etl.models import CovidCase
 # Geographic scope definitions
 # Maringá city_ibge_code: 4115200 (IBGE 7-digit code)
 SCOPE_FILTERS = {
-    "brasil": {},                                    # no filter → all rows
+    "brasil": {},  # no filter → all rows
     "parana": {"state": "PR"},
     "maringa": {"city_ibge_code": "4115200"},
 }
@@ -74,7 +74,7 @@ async def get_cases(
     if end_date:
         filters.append(CovidCase.date <= end_date)
 
-    where_clause = and_(*filters) if filters else and_()
+    where_clause = and_(*filters) if filters else true()
 
     # Total count (for pagination metadata)
     count_stmt = select(func.count()).select_from(CovidCase).where(where_clause)
@@ -122,7 +122,11 @@ async def get_cases_time_series(
     if scope not in SCOPE_FILTERS:
         raise ValueError(f"Unknown scope '{scope}'")
 
-    filters = [CovidCase.place_type == "state"] if scope == "brasil" else [CovidCase.place_type == "city"]
+    filters = (
+        [CovidCase.place_type == "state"]
+        if scope == "brasil"
+        else [CovidCase.place_type == "city"]
+    )
     geo = SCOPE_FILTERS[scope]
 
     if "state" in geo:

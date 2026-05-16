@@ -63,6 +63,7 @@ VACCINATION_STATES = os.environ.get("VACCINATION_STATES", "PR").upper().split(",
 # Job wrappers — APScheduler calls sync functions; we bridge to async
 # ---------------------------------------------------------------------------
 
+
 async def job_ingest() -> None:
     """
     Nightly COVID cases + vaccination ingestion.
@@ -91,6 +92,7 @@ async def job_economics() -> None:
 # ---------------------------------------------------------------------------
 # Scheduler setup
 # ---------------------------------------------------------------------------
+
 
 def build_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=TZ)
@@ -121,6 +123,7 @@ def build_scheduler() -> AsyncIOScheduler:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 async def main(run_now: bool = False) -> None:
     if run_now:

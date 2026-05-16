@@ -36,14 +36,14 @@ cat(sprintf("[install_packages] R version     : %s\n", R.version.string))
 # Core application packages
 # ---------------------------------------------------------------------------
 
-pkgs <- c(
+# Core packages — must succeed; build fails if any are missing.
+pkgs_required <- c(
   # API framework
   "plumber",
   "jsonlite",
 
-  # Time-series forecasting
+  # Time-series forecasting (non-Prophet)
   "forecast",
-  "prophet",
   "zoo",
 
   # Data wrangling
@@ -64,20 +64,39 @@ pkgs <- c(
   "renv"
 )
 
-cat(sprintf("[install_packages] Installing %d packages...\n", length(pkgs)))
+# Optional packages — build continues even if these fail.
+# Prophet requires Stan/C++ compilation and may fail on resource-constrained
+# runners; the run_prophet() function checks availability at call time.
+pkgs_optional <- c("prophet")
 
-install.packages(pkgs, dependencies = TRUE, quiet = FALSE, ask = FALSE)
+cat(sprintf("[install_packages] Installing %d required packages...\n", length(pkgs_required)))
+install.packages(pkgs_required, dependencies = TRUE, quiet = FALSE, ask = FALSE)
 
-# ---------------------------------------------------------------------------
-# Verify all primary packages installed
-# ---------------------------------------------------------------------------
-
+# Verify required packages
 installed_pkgs <- rownames(installed.packages())
-failed <- pkgs[!pkgs %in% installed_pkgs]
-
-if (length(failed) > 0L) {
-  stop(sprintf("[install_packages] FAILED: %s", paste(failed, collapse = ", ")))
+failed_required <- pkgs_required[!pkgs_required %in% installed_pkgs]
+if (length(failed_required) > 0L) {
+  stop(sprintf("[install_packages] FAILED (required): %s", paste(failed_required, collapse = ", ")))
 }
+
+cat(sprintf("[install_packages] Installing %d optional packages (failure allowed)...\n", length(pkgs_optional)))
+for (pkg in pkgs_optional) {
+  result <- tryCatch(
+    {
+      install.packages(pkg, dependencies = TRUE, quiet = FALSE, ask = FALSE)
+      "ok"
+    },
+    error   = function(e) paste("ERROR:", conditionMessage(e)),
+    warning = function(w) paste("WARN:", conditionMessage(w))
+  )
+  if (startsWith(result, "ERROR")) {
+    cat(sprintf("[install_packages] Optional package '%s' failed (non-fatal): %s\n", pkg, result))
+  } else {
+    cat(sprintf("[install_packages] Optional package '%s' installed.\n", pkg))
+  }
+}
+
+pkgs <- c(pkgs_required, pkgs_optional)
 
 cat("[install_packages] All packages installed successfully.\n")
 

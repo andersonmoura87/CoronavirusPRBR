@@ -76,6 +76,7 @@ _retry = retry(
 # Thin TTL in-memory cache (avoids hammering R on repeated identical requests)
 # ---------------------------------------------------------------------------
 
+
 class _TTLCache:
     """
     Simple dict-based TTL cache. Not thread-safe but asyncio is single-threaded
@@ -106,6 +107,7 @@ forecast_cache = _TTLCache(ttl_seconds=int(300))  # 5-minute cache
 # R service API wrappers
 # ---------------------------------------------------------------------------
 
+
 @_retry
 async def call_forecast(
     scope: str,
@@ -131,7 +133,7 @@ async def call_forecast(
     cached = forecast_cache.get(cache_key)
     if cached:
         cached["meta"]["cached"] = True
-        return cached
+        return cached  # type: ignore[return-value]
 
     client = get_r_client()
     resp = await client.post(
@@ -145,7 +147,7 @@ async def call_forecast(
         },
     )
     resp.raise_for_status()
-    result = resp.json()
+    result: dict = resp.json()
     forecast_cache.set(cache_key, result)
     return result
 
@@ -156,7 +158,7 @@ async def call_smooth(series: list[dict], window: int = 7) -> dict:
     client = get_r_client()
     resp = await client.post("/smooth", json={"data": series, "window": window})
     resp.raise_for_status()
-    return resp.json()
+    return resp.json()  # type: ignore[return-value]
 
 
 @_retry
@@ -177,7 +179,7 @@ async def call_correlation(
         json={"covid": covid_data, "economics": economics_data},
     )
     resp.raise_for_status()
-    return resp.json()
+    return resp.json()  # type: ignore[return-value]
 
 
 @_retry
@@ -186,4 +188,4 @@ async def check_r_health() -> dict:
     client = get_r_client()
     resp = await client.get("/health")
     resp.raise_for_status()
-    return resp.json()
+    return resp.json()  # type: ignore[return-value]

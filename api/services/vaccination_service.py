@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import case, func, select, and_
+from sqlalchemy import case, func, select, and_, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from etl.models import VaccinationRecord
@@ -39,7 +39,7 @@ async def get_vaccination_summary(
     if end_date:
         filters.append(VaccinationRecord.date <= end_date)
 
-    where_clause = and_(*filters) if filters else and_()
+    where_clause = and_(*filters) if filters else true()
 
     # Pivot: one row per (date, state) with aggregated dose counts
     pivot_stmt = (
@@ -66,14 +66,11 @@ async def get_vaccination_summary(
 
     rows = (await session.execute(pivot_stmt)).all()
 
-    count_stmt = (
-        select(func.count())
-        .select_from(
-            select(VaccinationRecord.date, VaccinationRecord.state)
-            .where(where_clause)
-            .group_by(VaccinationRecord.date, VaccinationRecord.state)
-            .subquery()
-        )
+    count_stmt = select(func.count()).select_from(
+        select(VaccinationRecord.date, VaccinationRecord.state)
+        .where(where_clause)
+        .group_by(VaccinationRecord.date, VaccinationRecord.state)
+        .subquery()
     )
     total = (await session.execute(count_stmt)).scalar_one()
 

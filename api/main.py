@@ -141,7 +141,7 @@ async def request_logging_middleware(request: Request, call_next: Any) -> Respon
         path=request.url.path,
     )
 
-    response = await call_next(request)
+    response: Response = await call_next(request)
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000)
     log.info(

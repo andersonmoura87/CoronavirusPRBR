@@ -33,7 +33,9 @@ from sqlalchemy.orm import DeclarativeBase
 
 
 class Base(DeclarativeBase):
-    pass
+    # Allow legacy "attr: type = Column(...)" annotations alongside Mapped[].
+    # All subclasses inherit this flag automatically.
+    __allow_unmapped__ = True
 
 
 # ---------------------------------------------------------------------------

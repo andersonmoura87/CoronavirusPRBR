@@ -516,5 +516,35 @@ async def run_all() -> None:
     log.info("economics.ingest.done")
 
 
+# ---------------------------------------------------------------------------
+# Pure helper utilities — usable without a database connection
+# ---------------------------------------------------------------------------
+
+
+def aggregate_covid_monthly(df: Any) -> Any:
+    """Aggregate a daily COVID DataFrame to monthly totals.
+
+    Args:
+        df: pandas DataFrame with columns ``date`` (str or datetime) and
+            ``cases`` (numeric).  Rows with negative case counts are dropped
+            before aggregation (data-quality guard).
+
+    Returns:
+        DataFrame with columns ``month`` (first day of each month, datetime)
+        and ``cases_monthly`` (sum of cases for that month).
+    """
+    import pandas as pd  # local import — keeps this module importable without pandas
+
+    result = df.copy()
+    result["date"] = pd.to_datetime(result["date"])
+    result = result[result["cases"] >= 0]
+    result["month"] = result["date"].dt.to_period("M").dt.to_timestamp()
+    return (
+        result.groupby("month", as_index=False)["cases"]
+        .sum()
+        .rename(columns={"cases": "cases_monthly"})
+    )
+
+
 if __name__ == "__main__":
     asyncio.run(run_all())

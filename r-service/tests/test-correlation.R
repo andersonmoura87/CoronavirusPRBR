@@ -5,7 +5,7 @@
 library(testthat)
 
 # Source models only when not already loaded (e.g. by the CI inline script).
-if (!exists("run_correlation", mode = "function")) {
+if (!exists("run_full_correlation", mode = "function")) {
   model_file <- tryCatch(
     file.path(dirname(sys.frame(1)$ofile), "..", "models", "correlation.R"),
     error = function(e) "r-service/models/correlation.R"

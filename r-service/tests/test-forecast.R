@@ -7,7 +7,7 @@ library(testthat)
 # Source models only when not already loaded (e.g. by the CI inline script).
 # When run via test_dir(), sys.frame(1)$ofile may be NULL, so we fall back
 # to a repo-relative path; if neither works, assume global env has it.
-if (!exists("run_forecast_ensemble", mode = "function")) {
+if (!exists("run_ensemble", mode = "function")) {
   model_file <- tryCatch(
     file.path(dirname(sys.frame(1)$ofile), "..", "models", "forecast.R"),
     error = function(e) "r-service/models/forecast.R"

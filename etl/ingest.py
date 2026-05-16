@@ -126,7 +126,7 @@ def build_http_client() -> httpx.AsyncClient:
 async def _get_with_retry(
     client: httpx.AsyncClient, url: str, **kwargs: Any
 ) -> httpx.Response:
-    response = await client.get(url, **kwargs)  # type: ignore[arg-type]
+    response = await client.get(url, **kwargs)
     response.raise_for_status()
     return response
 
@@ -560,14 +560,14 @@ async def _upsert_vaccination_batch(session: AsyncSession, batch: list[dict]) ->
 
 def _safe_int(value: object) -> int | None:
     try:
-        return int(value) if value not in (None, "", "None") else None
+        return int(str(value)) if value not in (None, "", "None") else None
     except (ValueError, TypeError):
         return None
 
 
 def _safe_float(value: object) -> float | None:
     try:
-        return float(value) if value not in (None, "", "None") else None
+        return float(str(value)) if value not in (None, "", "None") else None
     except (ValueError, TypeError):
         return None
 

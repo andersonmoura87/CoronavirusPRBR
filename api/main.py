@@ -26,13 +26,15 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from api.config import settings
@@ -64,7 +66,7 @@ log = structlog.get_logger()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     Runs before the first request (startup) and after the last (shutdown).
     Manages the shared httpx client for the R microservice.
@@ -130,7 +132,7 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def request_logging_middleware(request: Request, call_next):
+async def request_logging_middleware(request: Request, call_next: Any) -> Response:
     """Log every request with method, path, status, and duration."""
     t0 = time.perf_counter()
     structlog.contextvars.clear_contextvars()
@@ -199,9 +201,7 @@ app.include_router(economics.router)
 
 
 @app.get("/", include_in_schema=False)
-async def root():
-    from fastapi.responses import RedirectResponse
-
+async def root() -> RedirectResponse:
     return RedirectResponse(url="/docs")
 
 

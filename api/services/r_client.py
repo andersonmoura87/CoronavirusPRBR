@@ -133,7 +133,7 @@ async def call_forecast(
     cached = forecast_cache.get(cache_key)
     if cached:
         cached["meta"]["cached"] = True
-        return cached  # type: ignore[return-value]
+        return cached  # type: ignore[no-any-return]
 
     client = get_r_client()
     resp = await client.post(
@@ -158,7 +158,7 @@ async def call_smooth(series: list[dict], window: int = 7) -> dict:
     client = get_r_client()
     resp = await client.post("/smooth", json={"data": series, "window": window})
     resp.raise_for_status()
-    return resp.json()  # type: ignore[return-value]
+    return resp.json()  # type: ignore[no-any-return]
 
 
 @_retry
@@ -179,7 +179,7 @@ async def call_correlation(
         json={"covid": covid_data, "economics": economics_data},
     )
     resp.raise_for_status()
-    return resp.json()  # type: ignore[return-value]
+    return resp.json()  # type: ignore[no-any-return]
 
 
 @_retry
@@ -188,4 +188,4 @@ async def check_r_health() -> dict:
     client = get_r_client()
     resp = await client.get("/health")
     resp.raise_for_status()
-    return resp.json()  # type: ignore[return-value]
+    return resp.json()  # type: ignore[no-any-return]

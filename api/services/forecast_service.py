@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from sqlalchemy import insert
+try:
+    from sqlalchemy.dialects.postgresql import insert
+except ImportError:  # pragma: no cover
+    from sqlalchemy import insert  # type: ignore[assignment]
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.services.cases_service import get_cases_time_series
@@ -75,7 +78,7 @@ async def get_forecast(
     if persist and not result.get("meta", {}).get("cached", False):
         await _persist_forecast(session, scope, model, conf_level, result)
 
-    return result
+    return result  # type: ignore[no-any-return]
 
 
 async def _persist_forecast(

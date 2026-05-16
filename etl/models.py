@@ -44,6 +44,8 @@ class Base(DeclarativeBase):
 class TimestampMixin:
     """Automatic created_at / updated_at columns for every table."""
 
+    __allow_unmapped__ = True
+
     created_at: datetime = Column(  # type: ignore[assignment]
         DateTime(timezone=True),
         server_default=func.now(),

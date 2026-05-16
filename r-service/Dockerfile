@@ -38,6 +38,13 @@ RUN apt-get update && apt-get install -y \
     libpng-dev \
     libtiff5-dev \
     libjpeg-dev \
+    libgmp-dev \
+    libsodium-dev \
+    libudunits2-dev \
+    libpq-dev \
+    libcairo2-dev \
+    libcairo-gobject2 \
+    default-libmysqlclient-dev \
     cmake \
     g++ \
     make \

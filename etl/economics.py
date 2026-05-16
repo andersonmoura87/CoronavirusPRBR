@@ -312,8 +312,8 @@ async def ingest_ibge_ipca(
 
     raw = await _fetch_sidra_table(
         client,
-        table_id=int(meta["table"]),  # type: ignore[arg-type]
-        variable=int(meta["variable"]),  # type: ignore[arg-type]
+        table_id=int(str(meta["table"])),
+        variable=int(str(meta["variable"])),
         territorial_level=str(meta["territorial_level"]),
         ibge_territorial_code=str(meta["ibge_territorial_code"]),
         periods=period_filter,
@@ -384,8 +384,8 @@ async def ingest_ibge_unemployment(
 
     raw = await _fetch_sidra_table(
         client,
-        table_id=int(meta["table"]),  # type: ignore[arg-type]
-        variable=int(meta["variable"]),  # type: ignore[arg-type]
+        table_id=int(str(meta["table"])),
+        variable=int(str(meta["variable"])),
         territorial_level=str(meta["territorial_level"]),
         ibge_territorial_code=str(meta["ibge_territorial_code"]),
         periods=period_filter,

@@ -29,13 +29,11 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
-    # Allow legacy "attr: type = Column(...)" annotations alongside Mapped[].
-    # All subclasses inherit this flag automatically.
-    __allow_unmapped__ = True
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -46,14 +44,12 @@ class Base(DeclarativeBase):
 class TimestampMixin:
     """Automatic created_at / updated_at columns for every table."""
 
-    __allow_unmapped__ = True
-
-    created_at: datetime = Column(  # type: ignore[assignment]
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
-    updated_at: datetime = Column(  # type: ignore[assignment]
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),

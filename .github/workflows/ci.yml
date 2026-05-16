@@ -148,8 +148,21 @@ jobs:
           pip install pytest pytest-asyncio httpx pytest-cov
 
       - name: Run database migrations (create tables)
-        run: python -c "import asyncio; from etl.models import Base; from sqlalchemy.ext.asyncio import create_async_engine; engine = create_async_engine('${{ env.DATABASE_URL }}'); asyncio.run(engine.begin().__aenter__().__class__.run_sync.__func__(engine.begin(), Base.metadata.create_all))"
-        # Simplified: tests/conftest.py handles this more cleanly
+        run: |
+          python - <<'PYEOF'
+          import asyncio
+          from etl.models import Base
+          from sqlalchemy.ext.asyncio import create_async_engine
+          import os
+
+          async def create_tables() -> None:
+              engine = create_async_engine(os.environ["DATABASE_URL"])
+              async with engine.begin() as conn:
+                  await conn.run_sync(Base.metadata.create_all)
+              await engine.dispose()
+
+          asyncio.run(create_tables())
+          PYEOF
 
       - name: Run pytest
         run: |

@@ -76,7 +76,12 @@ async def get_forecast(
     )
 
     if persist and not result.get("meta", {}).get("cached", False):
-        await _persist_forecast(session, scope, model, conf_level, result)
+        try:
+            await _persist_forecast(session, scope, model, conf_level, result)
+        except Exception:
+            # Persist is a best-effort cache — failure (e.g. SQLite in tests,
+            # or a missing constraint) must never break the forecast response.
+            pass
 
     return result  # type: ignore[no-any-return]
 

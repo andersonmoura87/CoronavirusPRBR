@@ -198,11 +198,6 @@ jobs:
 
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          packages: lintr
-
-      - name: Install R test dependencies
-        uses: r-lib/actions/setup-r-dependencies@v2
-        with:
           packages: lintr, testthat, forecast, zoo, dplyr, tidyr, lubridate, broom, lmtest
 
       - name: Run lintr on R service
@@ -239,10 +234,18 @@ jobs:
         shell: Rscript {0}
         run: |
           library(testthat)
+          # Pre-source models so the exists() guards in test files skip re-sourcing
+          # (avoids path resolution issues when test_dir changes CWD to r-service/tests)
           source("r-service/models/forecast.R")
           source("r-service/models/correlation.R")
-          test_results <- test_dir("r-service/tests", reporter = "summary")
-          if (any(as.data.frame(test_results)$failed > 0)) quit(status = 1)
+          test_results <- test_dir(
+            "r-service/tests",
+            reporter  = c("summary", "fail"),
+            stop_on_failure = FALSE
+          )
+          # all_passed() is the correct testthat 3.x API; as.data.frame()$failed
+          # does not exist on testthat_results objects in newer versions.
+          if (!all_passed(test_results)) quit(status = 1)
 
   # ---------------------------------------------------------------------------
   # Job: build-api

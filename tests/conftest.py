@@ -30,6 +30,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
+from sqlalchemy.pool import StaticPool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from etl.models import Base, CovidCase, EconomicIndicator, VaccinationRecord
@@ -53,8 +54,20 @@ TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 @pytest_asyncio.fixture(scope="function")
 async def engine():
-    """Create a fresh SQLite engine + schema for each test function."""
-    eng = create_async_engine(TEST_DB_URL, echo=False)
+    """Create a fresh SQLite engine + schema for each test function.
+
+    StaticPool ensures every async session (the fixture session AND the
+    sessions created by the FastAPI dependency override inside test_app)
+    share the exact same in-memory SQLite connection.  Without it, each
+    new connection would get a completely empty database, making
+    sample_cases data invisible to the HTTP client.
+    """
+    eng = create_async_engine(
+        TEST_DB_URL,
+        echo=False,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield eng
@@ -85,13 +98,18 @@ def make_covid_case(
     new_confirmed: int = 10,
     new_deaths: int = 1,
 ) -> CovidCase:
+    # Base date 30 days ago so all fixtures fall within the forecast service's
+    # default training window (today - 365 days).  Using a hardcoded past year
+    # (e.g. 2021) would place the rows outside the window and cause the
+    # "Insufficient historical data" guard to trigger in tests.
+    base = date.today() - timedelta(days=30)
     return CovidCase(
         id=uuid.uuid4(),
         state=state,
         city=city,
         city_ibge_code=city_ibge_code,
         place_type="city",
-        date=date(2021, 6, 1) + timedelta(days=offset_days),
+        date=base + timedelta(days=offset_days),
         confirmed=confirmed + offset_days * 10,
         deaths=deaths + offset_days,
         new_confirmed=new_confirmed,

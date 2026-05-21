@@ -57,8 +57,8 @@ class CaseItem(BaseModel):
 class CasesResponse(BaseModel):
     scope: str = Field(description="Geographic scope: brasil | parana | maringa")
     total_records: int
-    date_range: dict[str, str] = Field(
-        description="First and last date in the returned dataset",
+    date_range: dict[str, Optional[str]] = Field(
+        description="First and last date in the returned dataset (null when empty)",
         examples=[{"start": "2020-03-01", "end": "2023-12-31"}],
     )
     data: list[CaseItem]

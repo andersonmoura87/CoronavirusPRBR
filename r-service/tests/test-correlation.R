@@ -4,11 +4,12 @@
 
 library(testthat)
 
-# Source models only when not already loaded (e.g. by the CI inline script).
+# test_dir() uses withr::with_dir() so CWD is r-service/tests, not repo root.
+# test_path() returns an absolute path anchored to the test directory.
 if (!exists("run_full_correlation", mode = "function")) {
   model_file <- tryCatch(
-    file.path(dirname(sys.frame(1)$ofile), "..", "models", "correlation.R"),
-    error = function(e) "r-service/models/correlation.R"
+    testthat::test_path("..", "models", "correlation.R"),
+    error = function(e) "../models/correlation.R"
   )
   source(model_file, local = FALSE)
 }

@@ -4,13 +4,15 @@
 
 library(testthat)
 
-# Source models only when not already loaded (e.g. by the CI inline script).
-# When run via test_dir(), sys.frame(1)$ofile may be NULL, so we fall back
-# to a repo-relative path; if neither works, assume global env has it.
+# test_dir() uses withr::with_dir() so CWD is r-service/tests, not repo root.
+# test_path() returns an absolute path anchored to the test directory — it is
+# the only reliable way to source sibling directories in all invocation modes.
+# Fall back to "../models/X.R" (relative to tests/) when test_path() is not
+# available (e.g. interactive run outside test_dir()).
 if (!exists("run_ensemble", mode = "function")) {
   model_file <- tryCatch(
-    file.path(dirname(sys.frame(1)$ofile), "..", "models", "forecast.R"),
-    error = function(e) "r-service/models/forecast.R"
+    testthat::test_path("..", "models", "forecast.R"),
+    error = function(e) "../models/forecast.R"
   )
   source(model_file, local = FALSE)
 }

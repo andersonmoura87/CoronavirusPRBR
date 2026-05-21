@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY api/requirements.txt .
 RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip && \
     /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
@@ -49,10 +49,10 @@ RUN useradd --create-home --shell /bin/bash appuser
 WORKDIR /app
 RUN chown appuser:appuser /app
 
-# Copy application source
-COPY --chown=appuser:appuser . ./api/
+# Copy application source — paths relative to repo root build context
+COPY --chown=appuser:appuser api/ ./api/
 # Copy shared ETL models (SQLAlchemy ORM + config)
-COPY --chown=appuser:appuser ../etl ./etl/
+COPY --chown=appuser:appuser etl/ ./etl/
 
 USER appuser
 

@@ -25,7 +25,7 @@ import asyncio
 import uuid
 from datetime import date, timedelta
 from typing import AsyncGenerator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -33,10 +33,9 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from etl.models import Base, CovidCase, EconomicIndicator, VaccinationRecord
+from etl.models import Base, CovidCase, EconomicIndicator
 from api.main import app
 from api.dependencies import get_db
-from api.services.r_client import get_r_client
 
 # ---------------------------------------------------------------------------
 # Event loop policy (required for pytest-asyncio with SQLAlchemy async)
@@ -213,7 +212,9 @@ def mock_r_client():
     mock_client = AsyncMock()
 
     async def mock_post(url, **kwargs):
-        response = AsyncMock()
+        # httpx Response.json() is SYNCHRONOUS — use MagicMock so that
+        # resp.json() returns the dict directly, not a coroutine.
+        response = MagicMock()
         response.raise_for_status = lambda: None
         if "/forecast" in url:
             response.json.return_value = MOCK_FORECAST_RESPONSE
@@ -224,7 +225,7 @@ def mock_r_client():
         return response
 
     async def mock_get(url, **kwargs):
-        response = AsyncMock()
+        response = MagicMock()
         response.raise_for_status = lambda: None
         response.json.return_value = {"status": "ok", "r_version": "R 4.3.3"}
         return response

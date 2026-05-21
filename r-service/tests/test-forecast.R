@@ -154,30 +154,37 @@ test_that("run_arima returns correct horizon length", {
 
 # ---------------------------------------------------------------------------
 # run_ensemble — tests that partial model failure is handled gracefully
+#
+# with_mocked_bindings() requires pkgload (devtools::load_all()), which is
+# not available when files are sourced directly into the global environment.
+# We replace functions in .GlobalEnv manually and restore them with on.exit().
 # ---------------------------------------------------------------------------
 test_that("run_ensemble returns data.frame even if one model fails", {
   skip_if_not_installed("forecast")
   df <- make_series(90)
-  # Monkey-patch run_prophet to always fail so ensemble falls back to 2 models
-  with_mocked_bindings(
-    run_prophet = function(...) stop("Prophet unavailable"),
-    {
-      result <- run_ensemble(df, horizon = 7L)
-      expect_s3_class(result, "data.frame")
-      expect_equal(nrow(result), 7L)
-      expect_match(result$model[1], "^ensemble")
-    }
-  )
+  orig_prophet <- run_prophet
+  assign("run_prophet", function(...) stop("Prophet unavailable"), envir = .GlobalEnv)
+  on.exit(assign("run_prophet", orig_prophet, envir = .GlobalEnv), add = TRUE)
+
+  result <- run_ensemble(df, horizon = 7L)
+  expect_s3_class(result, "data.frame")
+  expect_equal(nrow(result), 7L)
+  expect_match(result$model[1], "^ensemble")
 })
 
 test_that("run_ensemble errors when ALL models fail", {
   df <- make_series(90)
-  with_mocked_bindings(
-    run_arima       = function(...) stop("arima fail"),
-    run_prophet     = function(...) stop("prophet fail"),
-    run_holtwinters = function(...) stop("hw fail"),
-    {
-      expect_error(run_ensemble(df, horizon = 7L), "All models failed")
-    }
-  )
+  orig_arima   <- run_arima
+  orig_prophet <- run_prophet
+  orig_hw      <- run_holtwinters
+  assign("run_arima",       function(...) stop("arima fail"),   envir = .GlobalEnv)
+  assign("run_prophet",     function(...) stop("prophet fail"), envir = .GlobalEnv)
+  assign("run_holtwinters", function(...) stop("hw fail"),      envir = .GlobalEnv)
+  on.exit({
+    assign("run_arima",       orig_arima,   envir = .GlobalEnv)
+    assign("run_prophet",     orig_prophet, envir = .GlobalEnv)
+    assign("run_holtwinters", orig_hw,      envir = .GlobalEnv)
+  }, add = TRUE)
+
+  expect_error(run_ensemble(df, horizon = 7L), "All models failed")
 })

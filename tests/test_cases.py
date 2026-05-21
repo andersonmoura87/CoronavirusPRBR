@@ -55,15 +55,19 @@ class TestCasesService:
     async def test_get_cases_date_filter(
         self, db_session: AsyncSession, sample_cases
     ):
-        from datetime import date
+        from datetime import date, timedelta
+        # Fixture uses base = today-30; days 0..9 give 10 records.
+        base = date.today() - timedelta(days=30)
+        start = base
+        end   = base + timedelta(days=9)
         result = await get_cases(
             db_session, scope="maringa",
-            start_date=date(2021, 6, 1),
-            end_date=date(2021, 6, 10),
+            start_date=start,
+            end_date=end,
         )
         assert result["total_records"] == 10
         for row in result["data"]:
-            assert date(2021, 6, 1) <= row["date"] <= date(2021, 6, 10)
+            assert start <= row["date"] <= end
 
     @pytest.mark.asyncio
     async def test_get_cases_invalid_scope_raises(

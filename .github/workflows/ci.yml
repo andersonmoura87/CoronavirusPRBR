@@ -240,11 +240,13 @@ jobs:
           source("r-service/models/correlation.R")
           test_results <- test_dir(
             "r-service/tests",
-            reporter  = c("summary", "fail"),
+            reporter        = "summary",
             stop_on_failure = FALSE
           )
-          # all_passed() is the correct testthat 3.x API; as.data.frame()$failed
-          # does not exist on testthat_results objects in newer versions.
+          # all_passed() is the correct testthat 3.x API.
+          # We use stop_on_failure=FALSE + all_passed() instead of the
+          # "fail" reporter because FailReporter$end_reporter() calls stop()
+          # unconditionally, which exits before all_passed() is reached.
           if (!all_passed(test_results)) quit(status = 1)
 
   # ---------------------------------------------------------------------------

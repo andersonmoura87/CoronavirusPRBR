@@ -386,12 +386,14 @@ jobs:
         if: always()
         with:
           sarif_file: trivy-api.sarif
+          category: trivy-fastapi
 
       - name: Upload SARIF — R service
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: trivy-r.sarif
+          category: trivy-r-service
 
   # ---------------------------------------------------------------------------
   # Job: security-gate — FALHA no CI se encontrar CVE CRITICAL

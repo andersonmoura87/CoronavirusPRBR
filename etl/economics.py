@@ -538,7 +538,9 @@ def aggregate_covid_monthly(df: Any) -> Any:
     result = df.copy()
     result["date"] = pd.to_datetime(result["date"])
     result = result[result["cases"] >= 0]
-    result["month"] = result["date"].dt.to_period("M").dt.to_timestamp()
+    # Use first-of-month as a plain date so callers can compare with
+    # datetime.date values (e.g. date(2021, 1, 1)) without type mismatch.
+    result["month"] = result["date"].dt.to_period("M").dt.to_timestamp().dt.date
     return (
         result.groupby("month", as_index=False)["cases"]
         .sum()

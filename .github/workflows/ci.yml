@@ -145,7 +145,7 @@ jobs:
         run: |
           pip install -r etl/requirements.txt
           pip install -r api/requirements.txt
-          pip install pytest pytest-asyncio httpx pytest-cov
+          pip install pytest pytest-asyncio httpx pytest-cov aiosqlite pandas
 
       - name: Run database migrations (create tables)
         run: |

@@ -1,0 +1,444 @@
+# =============================================================================
+# .github/workflows/ci.yml — Continuous Integration
+#
+# Triggers: every push and pull_request to main / develop.
+#
+# Jobs (run in parallel where possible):
+#   lint-python   — ruff (fast linter + formatter check)
+#   type-check    — mypy, runs independently; does NOT block deploy.
+#                   Kept separate so a missing stub never kills a green test run.
+#                   Promote to gate once all packages have stubs / py.typed markers.
+#   test-python   — pytest with a real PostgreSQL service container
+#   lint-r        — lintr static analysis on the R service
+#   build-api     — docker build for the FastAPI image (no push on PR)
+#   build-r       — docker build for the R plumber image (no push on PR)
+#   security-scan — trivy vulnerability scan on both images
+#
+# Docker images are pushed to GHCR only on pushes to main (not on PRs).
+#
+# Secrets required (set in GitHub repo Settings → Secrets):
+#   BRASILIO_TOKEN  — optional, only needed for full ETL integration test
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_API: ghcr.io/${{ github.repository_owner }}/pandemic-api
+  IMAGE_R:   ghcr.io/${{ github.repository_owner }}/pandemic-r-service
+  PYTHON_VERSION: "3.11"
+
+# Cancel in-progress runs when a new push arrives on the same branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# ---------------------------------------------------------------------------
+# Job: lint-python
+# ---------------------------------------------------------------------------
+jobs:
+  lint-python:
+    name: "Lint Python (ruff)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install lint dependencies
+        run: pip install ruff
+
+      - name: ruff — fast linter + formatter check
+        run: |
+          ruff check api/ etl/ --output-format=github
+          ruff format api/ etl/ --check
+
+  # ---------------------------------------------------------------------------
+  # Job: type-check (mypy)
+  # Intentionally NOT listed in `needs:` of any downstream job.
+  # It runs in parallel, posts annotations, but never blocks deploy.
+  #
+  # Rationale: asyncpg, sqlalchemy[asyncio], and structlog ship incomplete
+  # type stubs. Blocking the pipeline on mypy errors from third-party stubs
+  # would generate noise without improving our own type safety. The py.typed
+  # markers in api/ and etl/ ensure our own code is checked correctly.
+  #
+  # To promote to a blocking gate: add `needs: [type-check]` to test-python.
+  # ---------------------------------------------------------------------------
+  type-check:
+    name: "Type Check (mypy)"
+    runs-on: ubuntu-latest
+    continue-on-error: true   # annotations shown, pipeline not blocked
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install type-check dependencies
+        run: |
+          pip install mypy \
+            pydantic pydantic-settings \
+            sqlalchemy[asyncio] asyncpg \
+            structlog httpx fastapi \
+            types-python-dateutil
+
+      - name: mypy — strict on our own code, lenient on third-party stubs
+        run: |
+          mypy api/ etl/ \
+            --ignore-missing-imports \
+            --disallow-untyped-defs \
+            --warn-return-any \
+            --warn-unused-ignores \
+            --no-error-summary \
+            --pretty
+
+  # ---------------------------------------------------------------------------
+  # Job: test-python
+  # ---------------------------------------------------------------------------
+  test-python:
+    name: "Test Python (pytest)"
+    runs-on: ubuntu-latest
+    needs: lint-python
+
+    services:
+      # Real PostgreSQL for integration tests — same version as docker-compose
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pandemic_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pandemic_test
+      R_SERVICE_URL: http://localhost:8001   # mocked in tests
+      ENVIRONMENT: test
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r etl/requirements.txt
+          pip install -r api/requirements.txt
+          pip install pytest pytest-asyncio httpx pytest-cov aiosqlite pandas
+
+      - name: Run database migrations (create tables)
+        run: |
+          python - <<'PYEOF'
+          import asyncio
+          from etl.models import Base
+          from sqlalchemy.ext.asyncio import create_async_engine
+          import os
+
+          async def create_tables() -> None:
+              engine = create_async_engine(os.environ["DATABASE_URL"])
+              async with engine.begin() as conn:
+                  await conn.run_sync(Base.metadata.create_all)
+              await engine.dispose()
+
+          asyncio.run(create_tables())
+          PYEOF
+
+      - name: Run pytest
+        run: |
+          pytest tests/ \
+            --cov=api \
+            --cov=etl \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --tb=short \
+            -v
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        if: always()
+        with:
+          file: coverage.xml
+          flags: python
+          fail_ci_if_error: false
+
+  # ---------------------------------------------------------------------------
+  # Job: lint-r
+  # ---------------------------------------------------------------------------
+  lint-r:
+    name: "Lint R (lintr)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.3.3"
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: lintr, testthat, forecast, zoo, dplyr, tidyr, lubridate, broom, lmtest
+
+      - name: Run lintr on R service
+        shell: Rscript {0}
+        run: |
+          library(lintr)
+          lints <- lint_dir(
+            "r-service",
+            linters = linters_with_defaults(
+              line_length_linter(120),
+              # snake_case not enforced (mixed codebase with tidyverse conventions)
+              object_name_linter      = NULL,
+              # dplyr/ggplot2 use NSE — object_usage_linter produces false positives
+              # for variables like `cases`, `value`, `indicator`, `ds`, `y`
+              object_usage_linter     = NULL,
+              # Architectural / explanatory comments are intentional
+              commented_code_linter   = NULL
+            )
+          )
+          # Only fail on genuine errors (type == "error"), not stylistic warnings
+          errors <- lints[vapply(lints, function(l) l$type == "error", logical(1))]
+          if (length(errors) > 0) {
+            print(errors)
+            quit(status = 1)
+          }
+          if (length(lints) > 0) {
+            cat(sprintf("lintr: %d style warning(s) — not blocking.\n", length(lints)))
+            print(lints)
+          } else {
+            cat("lintr: no issues found.\n")
+          }
+
+      - name: Run testthat — forecast models
+        shell: Rscript {0}
+        run: |
+          library(testthat)
+          # Pre-source models so the exists() guards in test files skip re-sourcing
+          # (avoids path resolution issues when test_dir changes CWD to r-service/tests)
+          source("r-service/models/forecast.R")
+          source("r-service/models/correlation.R")
+          # tryCatch is version-agnostic: test_dir() calls stop() on failure
+          # (stop_on_failure=TRUE default), we catch that and exit with 1.
+          # This avoids depending on all_passed() which is not available in
+          # older testthat releases installed on the CI runner.
+          result <- tryCatch(
+            test_dir("r-service/tests", reporter = "summary"),
+            error = function(e) {
+              cat("R tests failed:", conditionMessage(e), "\n")
+              NULL
+            }
+          )
+          if (is.null(result)) quit(status = 1)
+
+  # ---------------------------------------------------------------------------
+  # Job: build-api
+  # ---------------------------------------------------------------------------
+  build-api:
+    name: "Build Docker — FastAPI"
+    runs-on: ubuntu-latest
+    needs: test-python
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_API }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api/Dockerfile
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # Job: build-r
+  # ---------------------------------------------------------------------------
+  build-r:
+    name: "Build Docker — R service"
+    runs-on: ubuntu-latest
+    # R service build takes ~15 min (Stan compilation); only run on main pushes
+    # and when r-service/ files changed, to avoid burning CI minutes on every PR.
+    if: |
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.changed_files, 'r-service/')
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_R }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: r-service
+          file: r-service/Dockerfile
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Layer cache backed by GitHub Actions cache — Stan .o files reused
+          cache-from: type=gha,scope=r-service
+          cache-to: type=gha,mode=max,scope=r-service
+          build-args: |
+            CRAN_SNAPSHOT_DATE=2024-06-01
+
+  # ---------------------------------------------------------------------------
+  # Job: security-scan — SARIF upload (informativo, não bloqueia deploy)
+  # Roda após builds e envia resultados para a aba Security do GitHub.
+  # ---------------------------------------------------------------------------
+  security-scan:
+    name: "Security Scan — SARIF (informativo)"
+    runs-on: ubuntu-latest
+    needs: [build-api, build-r]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Scan FastAPI image (SARIF)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_API }}:latest
+          format: sarif
+          output: trivy-api.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"   # exit 0 aqui — só coleta; o job abaixo falha na CRITICAL
+
+      - name: Scan R service image (SARIF)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_R }}:latest
+          format: sarif
+          output: trivy-r.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload SARIF — FastAPI
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-api.sarif
+          category: trivy-fastapi
+
+      - name: Upload SARIF — R service
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-r.sarif
+          category: trivy-r-service
+
+  # ---------------------------------------------------------------------------
+  # Job: security-gate — FALHA no CI se encontrar CVE CRITICAL
+  #
+  # Design: dois jobs separados permitem distinguir "tem CVEs?" (gate, bloqueia)
+  # de "quais CVEs?" (SARIF, informativo). O gate usa exit-code: "1" para
+  # CRITICAL e cria uma anotação de erro no PR. HIGH é permitido pois muitos
+  # vêm de dependências transitivas do R/Stan que não têm patch disponível.
+  # ---------------------------------------------------------------------------
+  security-gate:
+    name: "Security Gate — falha em CRITICAL"
+    runs-on: ubuntu-latest
+    needs: [build-api, build-r]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Gate — FastAPI (falha em CRITICAL)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_API }}:latest
+          format: table
+          severity: CRITICAL
+          exit-code: "1"   # falha o job se houver CVE CRITICAL
+
+      - name: Gate — R service (falha em CRITICAL)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_R }}:latest
+          format: table
+          severity: CRITICAL
+          exit-code: "1"
+
+      - name: Abrir issue automática em caso de falha
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              title: `🚨 CVE CRITICAL encontrado — build ${context.sha.slice(0,7)}`,
+              body:  `O job \`security-gate\` detectou uma vulnerabilidade CRITICAL.\n\n`
+                   + `Consulte a aba **Security → Code scanning** para detalhes.\n\n`
+                   + `Commit: ${context.sha}\nRun: ${context.runUrl}`,
+              labels: ['security', 'critical'],
+            });

@@ -1,0 +1,61 @@
+# =============================================================================
+# k8s/configmap.yaml — non-sensitive application configuration
+#
+# Sensitive values (DATABASE_URL, BRASILIO_TOKEN) go in secret.yaml.
+# This ConfigMap holds only non-secret runtime configuration so reviewers
+# can read it without security concerns.
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pandemic-config
+  namespace: pandemic
+  labels:
+    app.kubernetes.io/part-of: pandemic-data-platform
+data:
+  ENVIRONMENT: "production"
+  R_SERVICE_URL: "http://pandemic-r-service:8001"
+  R_SERVICE_TIMEOUT: "120"
+  CORS_ORIGINS: "*"
+  METRICS_ENABLED: "true"
+  VACCINATION_STATES: "PR"
+  ECONOMICS_HISTORY_YEARS: "6"
+  HTTP_TIMEOUT_SECONDS: "60"
+  HTTP_MAX_RETRIES: "5"
+  DB_BATCH_SIZE: "500"
+  CRAN_SNAPSHOT_DATE: "2024-06-01"
+
+---
+# Prometheus scrape config is also stored as a ConfigMap so the
+# prometheus pod can mount it without rebuilding its image.
+# (Used by the optional in-cluster Prometheus deployment; docker-compose
+# uses the file mount in monitoring/prometheus.yml instead.)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: pandemic
+  labels:
+    app.kubernetes.io/component: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        environment: production
+        project: pandemic-data-platform
+
+    scrape_configs:
+      - job_name: pandemic_api
+        static_configs:
+          - targets: ["pandemic-api:8000"]
+        metrics_path: /metrics
+        scrape_interval: 10s
+
+      - job_name: r_service_health
+        static_configs:
+          - targets: ["pandemic-r-service:8001"]
+        metrics_path: /health
+        scrape_interval: 30s

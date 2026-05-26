@@ -13,7 +13,7 @@ Design decisions:
 """
 
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
@@ -29,7 +29,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
@@ -40,15 +40,16 @@ class Base(DeclarativeBase):
 # Mixin helpers
 # ---------------------------------------------------------------------------
 
+
 class TimestampMixin:
     """Automatic created_at / updated_at columns for every table."""
 
-    created_at: datetime = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
-    updated_at: datetime = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
@@ -59,6 +60,7 @@ class TimestampMixin:
 # ---------------------------------------------------------------------------
 # COVID-19 case data  (source: brasil.io)
 # ---------------------------------------------------------------------------
+
 
 class CovidCase(Base, TimestampMixin):
     """
@@ -98,7 +100,9 @@ class CovidCase(Base, TimestampMixin):
 
     __table_args__ = (
         # Natural key: one record per date/place combination
-        UniqueConstraint("date", "city_ibge_code", "place_type", name="uq_covid_cases_date_city"),
+        UniqueConstraint(
+            "date", "city_ibge_code", "place_type", name="uq_covid_cases_date_city"
+        ),
         # Composite index to speed up the most common API query pattern
         Index("ix_covid_cases_state_date", "state", "date"),
     )
@@ -107,6 +111,7 @@ class CovidCase(Base, TimestampMixin):
 # ---------------------------------------------------------------------------
 # Vaccination data  (source: OpenDataSUS)
 # ---------------------------------------------------------------------------
+
 
 class VaccinationRecord(Base, TimestampMixin):
     """
@@ -127,12 +132,15 @@ class VaccinationRecord(Base, TimestampMixin):
     date = Column(Date, nullable=False, index=True)
 
     vaccine_name = Column(String(100), nullable=True)  # CoronaVac, AstraZeneca, etc.
-    dose = Column(String(10), nullable=True)            # "1", "2", "R" (reforço)
+    dose = Column(String(10), nullable=True)  # "1", "2", "R" (reforço)
     count = Column(Integer, nullable=False, default=0)
 
     __table_args__ = (
         UniqueConstraint(
-            "date", "city_ibge_code", "vaccine_name", "dose",
+            "date",
+            "city_ibge_code",
+            "vaccine_name",
+            "dose",
             name="uq_vaccination_date_city_vaccine_dose",
         ),
         Index("ix_vaccination_state_date", "state", "date"),
@@ -142,6 +150,7 @@ class VaccinationRecord(Base, TimestampMixin):
 # ---------------------------------------------------------------------------
 # Economic indicators  (sources: IBGE API + BCB / SGS API)
 # ---------------------------------------------------------------------------
+
 
 class EconomicIndicator(Base, TimestampMixin):
     """
@@ -170,11 +179,13 @@ class EconomicIndicator(Base, TimestampMixin):
     reference_date = Column(Date, nullable=False, index=True)
 
     value = Column(Float, nullable=False)
-    unit = Column(String(50), nullable=True)   # "%", "R$", "index"
+    unit = Column(String(50), nullable=True)  # "%", "R$", "index"
     notes = Column(Text, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("indicator_code", "reference_date", name="uq_economic_indicator_code_date"),
+        UniqueConstraint(
+            "indicator_code", "reference_date", name="uq_economic_indicator_code_date"
+        ),
         Index("ix_economic_indicator_code_date", "indicator_code", "reference_date"),
     )
 
@@ -182,6 +193,7 @@ class EconomicIndicator(Base, TimestampMixin):
 # ---------------------------------------------------------------------------
 # Forecast cache  (populated by the R microservice, consumed by FastAPI)
 # ---------------------------------------------------------------------------
+
 
 class ForecastResult(Base, TimestampMixin):
     """
@@ -196,10 +208,12 @@ class ForecastResult(Base, TimestampMixin):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    scope = Column(String(50), nullable=False, index=True)   # "brasil", "parana", "maringa"
-    model = Column(String(30), nullable=False)               # "prophet", "arima", "holtwinters"
+    scope = Column(
+        String(50), nullable=False, index=True
+    )  # "brasil", "parana", "maringa"
+    model = Column(String(30), nullable=False)  # "prophet", "arima", "holtwinters"
 
-    forecast_date = Column(Date, nullable=False)             # the predicted date
+    forecast_date = Column(Date, nullable=False)  # the predicted date
     predicted_cases = Column(Float, nullable=True)
     lower_bound = Column(Float, nullable=True)
     upper_bound = Column(Float, nullable=True)
@@ -210,6 +224,8 @@ class ForecastResult(Base, TimestampMixin):
     r_model_version = Column(String(20), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("scope", "model", "forecast_date", name="uq_forecast_scope_model_date"),
+        UniqueConstraint(
+            "scope", "model", "forecast_date", name="uq_forecast_scope_model_date"
+        ),
         Index("ix_forecast_scope_model", "scope", "model"),
     )

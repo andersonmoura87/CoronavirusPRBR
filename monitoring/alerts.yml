@@ -1,0 +1,120 @@
+# =============================================================================
+# monitoring/alerts.yml — Prometheus alerting rules
+#
+# Simulates the "pandemic surge" scenario described in the project narrative:
+# during a COVID surge, traffic to the API spikes dramatically. These alerts
+# are tuned to fire BEFORE the pod becomes overwhelmed, giving the HPA time
+# to scale up.
+# =============================================================================
+
+groups:
+
+  # ---------------------------------------------------------------------------
+  # API availability
+  # ---------------------------------------------------------------------------
+  - name: api_availability
+    rules:
+
+      - alert: APIHighErrorRate
+        expr: |
+          rate(http_requests_total{job="pandemic_api", status=~"5.."}[2m])
+          /
+          rate(http_requests_total{job="pandemic_api"}[2m]) > 0.05
+        for: 1m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "API error rate above 5%"
+          description: >
+            The FastAPI service is returning >5% HTTP 5xx responses over the
+            last 2 minutes. Current rate: {{ $value | humanizePercentage }}.
+            This may indicate the R microservice is unresponsive or the DB
+            connection pool is exhausted.
+
+      - alert: APIHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(http_request_duration_seconds_bucket{job="pandemic_api"}[5m])
+          ) > 3
+        for: 2m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "API p95 latency above 3 s"
+          description: >
+            The p95 response time for the pandemic API exceeds 3 seconds.
+            Current p95: {{ $value | humanizeDuration }}.
+            Check the /forecast endpoint — R model cold-start may be the cause.
+
+      - alert: APIDown
+        expr: up{job="pandemic_api"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "FastAPI service is unreachable"
+          description: >
+            Prometheus cannot scrape the pandemic API at api:8000/metrics.
+            The pod may have crashed or the service was not deployed.
+
+  # ---------------------------------------------------------------------------
+  # R microservice
+  # ---------------------------------------------------------------------------
+  - name: r_service
+    rules:
+
+      - alert: RServiceDown
+        expr: up{job="r_service_health"} == 0
+        for: 1m
+        labels:
+          severity: warning
+          team: data-science
+        annotations:
+          summary: "R plumber microservice is unreachable"
+          description: >
+            The R statistical model service at r-service:8001 is not responding.
+            The /forecast and /economics endpoints will return 502 until it recovers.
+
+  # ---------------------------------------------------------------------------
+  # Surge simulation alerts (portfolio narrative)
+  # ---------------------------------------------------------------------------
+  - name: surge_simulation
+    rules:
+
+      - alert: RequestSurgeDetected
+        expr: |
+          rate(http_requests_total{job="pandemic_api"}[1m]) > 50
+        for: 30s
+        labels:
+          severity: info
+          team: backend
+          scenario: surge
+        annotations:
+          summary: "Pandemic surge: request rate above 50 req/s"
+          description: >
+            Request rate has exceeded 50 req/s — simulating a COVID outbreak
+            peak scenario. The HPA should trigger scale-out within 60 seconds.
+            Current rate: {{ $value | humanize }} req/s.
+
+      - alert: ForecastEndpointSlow
+        expr: |
+          histogram_quantile(0.90,
+            rate(http_request_duration_seconds_bucket{
+              job="pandemic_api",
+              handler="/forecast"
+            }[5m])
+          ) > 10
+        for: 2m
+        labels:
+          severity: warning
+          team: data-science
+        annotations:
+          summary: "/forecast p90 latency above 10 s during surge"
+          description: >
+            The /forecast endpoint p90 latency exceeds 10 s. The R service
+            may be processing multiple concurrent model fits. Consider
+            scaling the r-service HPA or pre-computing forecasts via the
+            ETL scheduler.

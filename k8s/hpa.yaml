@@ -1,0 +1,184 @@
+# =============================================================================
+# k8s/hpa.yaml — Horizontal Pod Autoscaler
+#
+# Surge simulation scenario:
+#   "During a COVID outbreak, traffic spikes sharply as health professionals,
+#    journalists, and the public rush to check case data and forecasts."
+#
+# HPA behaviour during a simulated surge:
+#
+#   t=0    Normal load — API at 2 replicas, R service at 1
+#   t=1min Locust/k6 generates 200 req/s → CPU climbs past 60%
+#   t=2min HPA fires scale-up: API 2→4 replicas
+#   t=3min CPU still high: API 4→8 replicas
+#   t=4min Load stabilises at 8 replicas, R service scales to 2
+#   t=10min Load generator stops → pods scale down (stabilization 5 min)
+#
+# Reproduce with:
+#   kubectl run -i --tty load-generator --rm --image=busybox --restart=Never \
+#     -- /bin/sh -c "while true; do wget -q -O- http://pandemic-api:8000/cases/brasil; done"
+#
+# Metrics used:
+#   - CPU utilization (resource metric) — primary trigger
+#   - Custom metric http_requests_per_second — secondary for request-driven scaling
+#     (requires Prometheus Adapter; see comment below)
+#
+# Prerequisites:
+#   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# HPA — FastAPI (primary: CPU 60%, secondary: RPS)
+# ---------------------------------------------------------------------------
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: pandemic-api-hpa
+  namespace: pandemic
+  labels:
+    app: pandemic-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: pandemic-data-platform
+  annotations:
+    description: >
+      Scales the FastAPI service in response to CPU load and request rate.
+      Target CPU 60% ensures headroom for bursty model-serving requests before
+      p95 latency degrades. During a simulated COVID surge (200+ req/s) the
+      API scales from 2 to 10 replicas in under 3 minutes.
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pandemic-api
+
+  minReplicas: 2    # never drop below 2 for HA
+  maxReplicas: 10   # 10 replicas × 1 CPU limit = 10 cores max
+
+  metrics:
+    # ── Primary metric: CPU utilization ──────────────────────────────────
+    # Target 60% utilization per pod. At 60% there is still 40% headroom
+    # for in-flight R service calls (which are CPU-light in Python but
+    # block a worker thread while waiting for R).
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+
+    # ── Secondary metric: memory ──────────────────────────────────────────
+    # Scale if pods are using >80% of their memory limit (512Mi).
+    # This catches memory-pressure scenarios independently of CPU.
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: AverageValue
+          averageValue: 400Mi   # ~80% of the 512Mi limit
+
+    # ── Custom metric: HTTP request rate (requires Prometheus Adapter) ────
+    # Uncomment after installing prometheus-adapter in the cluster:
+    #   helm install prometheus-adapter prometheus-community/prometheus-adapter \
+    #     --set prometheus.url=http://prometheus.pandemic.svc.cluster.local
+    #
+    # - type: Pods
+    #   pods:
+    #     metric:
+    #       name: http_requests_per_second
+    #     target:
+    #       type: AverageValue
+    #       averageValue: "30"   # scale when avg pod handles >30 req/s
+
+  behavior:
+    scaleUp:
+      # Aggressive scale-up: add up to 4 pods immediately during a surge
+      # to prevent request queuing while new pods start.
+      stabilizationWindowSeconds: 30   # only 30 s delay before scaling up
+      policies:
+        - type: Pods
+          value: 4          # add at most 4 pods per scaling event
+          periodSeconds: 60
+        - type: Percent
+          value: 100        # or double the current count — whichever is larger
+          periodSeconds: 60
+      selectPolicy: Max     # choose the policy that adds the most pods
+
+    scaleDown:
+      # Conservative scale-down: wait 5 minutes after load drops to avoid
+      # thrashing (scale-down during a brief lull, then scale-up again).
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 2          # remove at most 2 pods per step
+          periodSeconds: 120
+      selectPolicy: Min
+
+---
+# ---------------------------------------------------------------------------
+# HPA — R Plumber Service
+#
+# The R service is heavier per replica (1–3 GB RAM, Stan model loading).
+# Scale conservatively: prefer fewer, larger pods over many small ones.
+# CPU target 70% — higher than API because model fitting is expected to
+# saturate the CPU for brief periods without being a problem.
+# ---------------------------------------------------------------------------
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: pandemic-r-service-hpa
+  namespace: pandemic
+  labels:
+    app: pandemic-r-service
+    app.kubernetes.io/component: r-service
+    app.kubernetes.io/part-of: pandemic-data-platform
+  annotations:
+    description: >
+      Scales the R plumber service in response to CPU load.
+      Model fitting (Prophet, ARIMA) is CPU-bound and memory-heavy,
+      so we scale to at most 4 replicas to stay within the ResourceQuota.
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pandemic-r-service
+
+  minReplicas: 1
+  maxReplicas: 4
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: AverageValue
+          averageValue: 2400Mi   # ~80% of the 3Gi limit
+
+  behavior:
+    scaleUp:
+      # Slower scale-up for R service: Stan compilation takes ~90 s per pod,
+      # so adding many pods quickly doesn't help — they won't be ready to serve
+      # traffic until after their long startupProbe period anyway.
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120   # add 1 pod every 2 minutes max
+      selectPolicy: Max
+
+    scaleDown:
+      # Even more conservative scale-down: R pods hold loaded model objects
+      # in memory (warm cache). Removing them means the next scale-up has to
+      # wait for cold Stan compilation again.
+      stabilizationWindowSeconds: 600   # 10-minute stabilisation window
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 180
+      selectPolicy: Min

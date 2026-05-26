@@ -1,0 +1,147 @@
+# =============================================================================
+# .github/workflows/deploy.yml — Continuous Deployment
+#
+# Triggered only after the CI workflow passes on main.
+# Deploys the updated images to the local k3d cluster via kubectl rollout.
+#
+# For portfolio purposes this workflow runs on a self-hosted runner that has
+# k3d + kubectl pre-installed (your development machine).
+# In a real project this would target a cloud cluster via a kubeconfig secret.
+#
+# Deployment strategy:
+#   1. Update image tags in the Kubernetes deployment manifests.
+#   2. Apply the manifests (kubectl apply -f k8s/).
+#   3. Wait for rollout to complete (kubectl rollout status).
+#   4. Run a smoke test against the live /health endpoint.
+#   5. Roll back automatically if the smoke test fails.
+#
+# Secrets required:
+#   KUBECONFIG_B64 — base64-encoded kubeconfig for the k3d cluster.
+#                    Generate with: base64 -w0 ~/.kube/config
+# =============================================================================
+
+name: Deploy to k3d
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_API: ghcr.io/${{ github.repository_owner }}/pandemic-api
+  IMAGE_R:   ghcr.io/${{ github.repository_owner }}/pandemic-r-service
+  K8S_NAMESPACE: pandemic
+
+jobs:
+  deploy:
+    name: "Deploy to k3d"
+    # Only deploy when CI succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: self-hosted   # your local machine with k3d + kubectl
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Authenticate to GHCR ──────────────────────────────────────────────
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Configure kubectl ─────────────────────────────────────────────────
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl cluster-info
+
+      # ── Resolve the exact SHA tag built by CI ─────────────────────────────
+      - name: Resolve image tags
+        id: tags
+        run: |
+          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "api_tag=sha-${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "r_tag=sha-${SHA_SHORT}"   >> $GITHUB_OUTPUT
+
+      # ── Update image references in manifests ──────────────────────────────
+      # Using kustomize-style sed rather than a full Helm chart keeps the
+      # demo stack simple while still being reproducible.
+      - name: Patch API image tag
+        run: |
+          sed -i "s|image: .*pandemic-api.*|image: ${{ env.IMAGE_API }}:${{ steps.tags.outputs.api_tag }}|" \
+            k8s/deployment.yaml
+
+      - name: Patch R service image tag
+        run: |
+          sed -i "s|image: .*pandemic-r-service.*|image: ${{ env.IMAGE_R }}:${{ steps.tags.outputs.r_tag }}|" \
+            k8s/deployment.yaml
+
+      # ── Apply Kubernetes manifests ────────────────────────────────────────
+      - name: Ensure namespace exists
+        run: |
+          kubectl get namespace ${{ env.K8S_NAMESPACE }} 2>/dev/null \
+            || kubectl create namespace ${{ env.K8S_NAMESPACE }}
+
+      - name: Apply manifests
+        run: |
+          kubectl apply -f k8s/ -n ${{ env.K8S_NAMESPACE }}
+
+      # ── Wait for rollout ──────────────────────────────────────────────────
+      - name: Wait for API rollout
+        run: |
+          kubectl rollout status deployment/pandemic-api \
+            -n ${{ env.K8S_NAMESPACE }} \
+            --timeout=180s
+
+      - name: Wait for R service rollout
+        run: |
+          kubectl rollout status deployment/pandemic-r-service \
+            -n ${{ env.K8S_NAMESPACE }} \
+            --timeout=300s   # Stan cold-start included in budget
+
+      # ── Smoke test ────────────────────────────────────────────────────────
+      - name: Smoke test — /health endpoint
+        id: smoke
+        run: |
+          # Port-forward in background for the test duration
+          kubectl port-forward \
+            svc/pandemic-api 9999:8000 \
+            -n ${{ env.K8S_NAMESPACE }} &
+          PF_PID=$!
+
+          sleep 5   # wait for port-forward to establish
+
+          STATUS=$(curl --fail --silent --max-time 10 \
+            http://localhost:9999/health | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'])")
+
+          kill $PF_PID 2>/dev/null || true
+
+          echo "Health status: ${STATUS}"
+          [ "${STATUS}" = "ok" ] || exit 1
+
+      # ── Automatic rollback on failure ─────────────────────────────────────
+      - name: Rollback on failure
+        if: failure() && steps.smoke.outcome == 'failure'
+        run: |
+          echo "Smoke test failed — rolling back deployments..."
+          kubectl rollout undo deployment/pandemic-api \
+            -n ${{ env.K8S_NAMESPACE }}
+          kubectl rollout undo deployment/pandemic-r-service \
+            -n ${{ env.K8S_NAMESPACE }}
+          echo "Rollback complete."
+          exit 1
+
+      # ── Deployment summary ────────────────────────────────────────────────
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "### Deployment successful :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Image |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| API     | \`${{ env.IMAGE_API }}:${{ steps.tags.outputs.api_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| R svc   | \`${{ env.IMAGE_R }}:${{ steps.tags.outputs.r_tag }}\` |" >> $GITHUB_STEP_SUMMARY
